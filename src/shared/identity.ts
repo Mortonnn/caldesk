@@ -7,6 +7,20 @@
  *  - 服务端存明文，所以没有账号密钥这一层
  */
 
+/**
+ * 默认的同步服务器地址。
+ *
+ * 发行版里这个地址就是作者自己部署的那套 Worker，所以用户**不用填地址**：
+ * 桌面端和手机端都直接用它。留空 = 用这个。
+ */
+export const DEFAULT_SERVER_URL = 'https://caldesk.ilikeu.cc.cd'
+
+/** 地址为空时回落到默认服务器 */
+export function resolveServerUrl(url: string | undefined | null): string {
+  const trimmed = (url ?? '').trim().replace(/\/$/, '')
+  return trimmed || DEFAULT_SERVER_URL
+}
+
 export interface DeviceIdentity {
   /** 账号 id，服务端生成 */
   accountId: string
@@ -42,8 +56,9 @@ export function parsePairingQr(text: string): PairPayload | null {
   try {
     const raw = JSON.parse(text) as Partial<PairPayload>
     if (!raw || raw.v !== 1) return null
-    if (!raw.u || !raw.p || !raw.c) return null
-    return { v: 1, u: String(raw.u), p: String(raw.p), c: String(raw.c) }
+    if (!raw.u || !raw.c) return null
+    // p 可以为空：手动输配对码时由服务端按 code 查
+    return { v: 1, u: String(raw.u), p: raw.p ? String(raw.p) : '', c: String(raw.c) }
   } catch {
     return null
   }

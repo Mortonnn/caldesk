@@ -617,6 +617,7 @@ handle('sync:get-state', () => {
 
 handle('sync:set-server', (url: string, deviceName: string) => {
   const id = ensureIdentity(app.getPath('userData'), {
+    // 地址留空 = 用默认服务器
     serverUrl: url.trim().replace(/\/$/, ''),
     deviceName: deviceName.trim() || undefined
   })
@@ -691,7 +692,13 @@ ipcMain.handle('sync:pair-join', async (_e, payloadText: string) => {
       `${base}/pair/status?pairId=${encodeURIComponent(parsed.p)}` +
         `&deviceId=${encodeURIComponent(id.deviceId)}&code=${encodeURIComponent(parsed.c)}`
     )
-    const status = ((await st.json()) as { status?: string }).status ?? 'pending'
+    const body = (await st.json()) as { status?: string; accountId?: string }
+    const status = body.status ?? 'pending'
+    // 批准后服务端给出 accountId，这时把这台设备正式记进账号
+    if (status === 'approved' && body.accountId && id.accountId !== body.accountId) {
+      saveIdentity(app.getPath('userData'), { ...id, accountId: body.accountId })
+      broadcastDataChanged()
+    }
     return { ok: true, data: { status } }
   } catch (err) {
     return { ok: false, error: (err as Error).message }

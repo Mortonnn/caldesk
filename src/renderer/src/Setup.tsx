@@ -9,7 +9,7 @@ import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { BarcodeScanner } from './BarcodeScanner'
 import { data } from './data'
-import { parsePairText } from './mobileIdentity'
+import { DEFAULT_SERVER_URL, parsePairText, resolveServerUrl } from './mobileIdentity'
 
 export default function Setup(): React.JSX.Element {
   const [step, setStep] = useState<'welcome' | 'scan'>('welcome')
@@ -56,7 +56,8 @@ export default function Setup(): React.JSX.Element {
   }
 
   async function joinByCode(): Promise<void> {
-    const u = url.trim().replace(/\/$/, '')
+    // 地址留空 = 用作者的服务器
+    const u = resolveServerUrl(url)
     if (!/^https?:\/\//.test(u)) {
       setError('地址需要以 http:// 或 https:// 开头')
       return
@@ -119,10 +120,10 @@ export default function Setup(): React.JSX.Element {
 
         <div className="setup-divider">或手动输入</div>
 
-        <label className="setup-label">Worker 地址</label>
+        <label className="setup-label">Worker 地址（留空即用作者的服务器）</label>
         <input
           className="task-input"
-          placeholder="https://caldesk.ilikeu.cc.cd"
+          placeholder={DEFAULT_SERVER_URL}
           value={url}
           autoCapitalize="none"
           autoCorrect="off"

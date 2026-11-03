@@ -459,7 +459,10 @@ async function pairingStatus(url: URL, env: Env): Promise<Response> {
   // 状态集合：pending | approved | rejected | expired | unknown
   // （设备被拒绝或事后被吊销，对配对方来说都是"没批下来"）
   if (device.status === 'revoked') return json({ status: 'rejected' })
-  if (device.status === 'approved') return json({ status: 'approved' })
+  if (device.status === 'approved') {
+    // 批准后把 accountId 一并告诉新设备：它自己不知道属于哪个账号
+    return json({ status: 'approved', accountId: device.account_id })
+  }
   // 仍是 pending：看这次配对是否已经过期
   if (pairing.expires_at <= Date.now() || pairing.status !== 'open') return json({ status: 'expired' })
   return json({ status: 'pending' })

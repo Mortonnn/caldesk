@@ -12,6 +12,19 @@
 /** localStorage 里身份文件的键 */
 export const IDENTITY_KEY = 'caldesk.identity'
 
+/**
+ * 默认的同步服务器地址（发行版 = 作者自己部署的那套 Worker）。
+ *
+ * 留空 = 用这个，所以手机端不用填地址。
+ */
+export const DEFAULT_SERVER_URL = 'https://caldesk.ilikeu.cc.cd'
+
+/** 地址为空时回落到默认服务器 */
+export function resolveServerUrl(url: string | undefined | null): string {
+  const trimmed = (url ?? '').trim().replace(/\/$/, '')
+  return trimmed || DEFAULT_SERVER_URL
+}
+
 export interface MobileIdentity {
   accountId: string
   deviceId: string
@@ -47,7 +60,7 @@ export function loadMobileIdentity(): MobileIdentity | null {
       deviceId: parsed.deviceId,
       deviceSecret: parsed.deviceSecret,
       deviceName: parsed.deviceName ?? '这台手机',
-      serverUrl: parsed.serverUrl ?? ''
+      serverUrl: parsed.serverUrl?.trim() || DEFAULT_SERVER_URL
     }
   } catch {
     return null
@@ -66,7 +79,11 @@ export function ensureMobileIdentity(patch: {
   if (existing) {
     const next: MobileIdentity = {
       ...existing,
-      serverUrl: patch.serverUrl ?? existing.serverUrl,
+      // 传空字符串 = 用默认服务器
+      serverUrl:
+        patch.serverUrl === undefined
+          ? existing.serverUrl
+          : patch.serverUrl.trim() || DEFAULT_SERVER_URL,
       deviceName: patch.deviceName ?? existing.deviceName
     }
     saveMobileIdentity(next)
@@ -77,7 +94,7 @@ export function ensureMobileIdentity(patch: {
     deviceId: randomUuid(),
     deviceSecret: randomHex(32),
     deviceName: patch.deviceName ?? '这台手机',
-    serverUrl: patch.serverUrl ?? ''
+    serverUrl: patch.serverUrl?.trim() || DEFAULT_SERVER_URL
   }
   saveMobileIdentity(created)
   return created

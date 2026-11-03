@@ -19,6 +19,7 @@ import type {
   SnapshotMeta
 } from '@shared/types'
 import {
+  DEFAULT_SERVER_URL,
   ensureMobileIdentity,
   isMobilePaired,
   loadMobileIdentity,
@@ -371,7 +372,13 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
           const st = await fetch(
             `${parsed.u}/pair/status?pairId=${encodeURIComponent(parsed.p)}&deviceId=${encodeURIComponent(mobile.deviceId)}&code=${encodeURIComponent(parsed.c)}`
           )
-          const status = ((await st.json()) as { status?: string }).status ?? 'pending'
+          const body = (await st.json()) as { status?: string; accountId?: string }
+          const status = body.status ?? 'pending'
+          // 批准后服务端会给出 accountId，这时这台手机才算真正加入账号
+          if (status === 'approved' && body.accountId) {
+            mobile.accountId = body.accountId
+            saveMobileIdentity(mobile)
+          }
           return {
             ok: true as const,
             data: { status: status as 'pending' | 'approved' | 'rejected' | 'expired' }
@@ -522,6 +529,19 @@ declare global {
 
 function readStoredConfig(): HttpConfig | null {
   try {
+    // 移动端：身份存在 caldesk.identity 里（配对通过后才有 accountId）
+    const idRaw = localStorage.getItem('caldesk.identity')
+    if (idRaw) {
+      const id = JSON.parse(idRaw) as Partial<MobileIdentity>
+      if (id.deviceId && id.deviceSecret) {
+        return {
+          url: id.serverUrl?.trim() || DEFAULT_SERVER_URL,
+          deviceId: id.deviceId,
+          deviceSecret: id.deviceSecret
+        }
+      }
+    }
+    // 旧版配置：只有一个全局令牌
     const raw = localStorage.getItem(HOST_KEY)
     if (!raw) return null
     const parsed = JSON.parse(raw) as Partial<HttpConfig>
@@ -546,7 +566,9 @@ export function host(): HostApi {
     return resolved
   }
   const stored = readStoredConfig()
-  resolved = stored ? createHttpHost(stored) : createStub()
+  // 移动端：即使还没配对，也用默认服务器起一个 HTTP host，
+  // 这样「扫码配对」才能真的发请求（stub 只会报"未接入同步"）
+  resolved = stored ? createHttpHost(stored) : createHttpHost({ url: DEFAULT_SERVER_URL })
   return resolved
 }
 

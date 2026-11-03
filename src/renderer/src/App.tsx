@@ -25,6 +25,7 @@ import type {
 } from '@shared/types'
 import { isDoneLine, lineText, splitLines } from '@shared/types'
 import { describeRrule, toDayNumber, weekdayOf } from '@shared/rrule'
+import { DEFAULT_SERVER_URL } from '@shared/identity'
 import { data } from './data'
 import { QrCode } from './QrCode'
 
@@ -1239,9 +1240,12 @@ export default function App(): React.JSX.Element {
 
                   <section className="set-block">
                     <span className="pop-label">同步（Cloudflare）</span>
+                    <p className="pop-desc">
+                      留空即用作者的服务器 <code>{DEFAULT_SERVER_URL}</code>；自己部署的话填自己的地址。
+                    </p>
                     <input
                       className="task-input"
-                      placeholder="服务器地址，如 https://caldesk.ilikeu.cc.cd"
+                      placeholder={`服务器地址（留空 = ${DEFAULT_SERVER_URL}）`}
                       value={syncUrl}
                       onChange={(e) => setSyncUrl(e.target.value)}
                     />
@@ -1283,7 +1287,6 @@ export default function App(): React.JSX.Element {
                         />
                         <button
                           className="primary-btn"
-                          disabled={!syncUrl.trim()}
                           onClick={() => void createSyncAccount()}
                         >
                           创建账号

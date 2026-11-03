@@ -34,6 +34,8 @@ export function detectEnv(): BootEnv {
   } catch {
     stored = false
   }
+  // 移动端即使没配对也要能显示「扫码配对」页，所以 hasRemote 只影响
+  // 是不是已经有账号可用了 —— 这里统一按"有没有账号"判断
   return { hasIpc, hasRemote: injected || stored }
 }
 

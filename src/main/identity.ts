@@ -10,7 +10,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { randomBytes, randomUUID } from 'node:crypto'
-import type { DeviceIdentity } from '@shared/identity'
+import { DEFAULT_SERVER_URL, type DeviceIdentity } from '@shared/identity'
 
 export interface StoredIdentity extends DeviceIdentity {
   /** 创建时间，仅用于展示 */
@@ -33,7 +33,8 @@ export function loadIdentity(userDataDir: string): StoredIdentity | null {
       deviceId: raw.deviceId,
       deviceSecret: raw.deviceSecret,
       deviceName: raw.deviceName ?? '这台电脑',
-      serverUrl: raw.serverUrl ?? '',
+      // 地址留空就等于默认服务器
+      serverUrl: raw.serverUrl?.trim() || DEFAULT_SERVER_URL,
       createdAt: raw.createdAt
     }
   } catch {
@@ -61,7 +62,8 @@ export function ensureIdentity(
   if (existing) {
     const next: StoredIdentity = {
       ...existing,
-      serverUrl: patch.serverUrl ?? existing.serverUrl,
+      // 传空字符串 = 用默认服务器
+      serverUrl: patch.serverUrl === undefined ? existing.serverUrl : patch.serverUrl.trim() || DEFAULT_SERVER_URL,
       deviceName: patch.deviceName ?? existing.deviceName
     }
     if (
@@ -77,7 +79,7 @@ export function ensureIdentity(
     deviceId: randomUUID(),
     deviceSecret: randomBytes(32).toString('hex'),
     deviceName: patch.deviceName ?? '这台电脑',
-    serverUrl: patch.serverUrl ?? '',
+    serverUrl: patch.serverUrl?.trim() || DEFAULT_SERVER_URL,
     createdAt: Date.now()
   }
   saveIdentity(userDataDir, created)
