@@ -85,11 +85,11 @@ export function BarcodeScanner({
   }, [onResult, onError])
 
   return (
-    <div className="scanner">
-      <video ref={videoRef} className="scanner-video" muted playsInline />
-      {!ready && <p className="scanner-hint">正在打开摄像头…</p>}
-      <div className="scanner-frame" />
-      <button className="ghost scanner-cancel" onClick={onCancel}>
+    <div className="m-scanner-inner">
+      <video ref={videoRef} className="m-scanner-video" muted playsInline />
+      {!ready && <p className="m-scanner-hint">正在打开摄像头…</p>}
+      <div className="m-scanner-frame" />
+      <button className="m-scanner-cancel" onClick={onCancel}>
         取消
       </button>
     </div>

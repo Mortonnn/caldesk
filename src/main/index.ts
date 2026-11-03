@@ -505,6 +505,61 @@ function broadcastDataChanged(): void {
   for (const win of [mainWindow, miniWindow]) {
     if (win && !win.isDestroyed()) win.webContents.send('data:changed')
   }
+  schedulePush()
+}
+
+/** 只通知窗口，不触发推送（拉取到远端改动时用，避免自己推自己） */
+function notifyWindowsChanged(): void {
+  for (const win of [mainWindow, miniWindow]) {
+    if (win && !win.isDestroyed()) win.webContents.send('data:changed')
+  }
+}
+
+/* --------------------------- 改动后自动推送 --------------------------- */
+
+/**
+ * 本地一有改动，就尽快把变更推给服务端，
+ * 这样手机端不用干等 5 分钟的定时同步。
+ *
+ * 3 秒防抖：连续操作（比如勾选多个任务）只推一次。
+ */
+let pushTimer: NodeJS.Timeout | null = null
+let pushing = false
+let pushAgain = false
+
+function schedulePush(): void {
+  if (pushTimer) clearTimeout(pushTimer)
+  pushTimer = setTimeout(() => {
+    pushTimer = null
+    void pushNow()
+  }, 3000)
+}
+
+async function pushNow(): Promise<void> {
+  const id = ensureIdentity(app.getPath('userData'))
+  if (!isPaired(id)) return
+  if (pushing) {
+    // 正在推，标记一下稍后再推一次
+    pushAgain = true
+    return
+  }
+  pushing = true
+  try {
+    const report = await syncNow(id)
+    console.log(`[caldesk] auto-push: push=${report.pushed} fail=${report.failed}`)
+    if (report.ok) {
+      mainWindow?.webContents.send('sync:done', report)
+      if (report.pulled > 0) notifyWindowsChanged()
+    }
+  } catch (err) {
+    console.error('[caldesk] auto-push 异常:', (err as Error).message)
+  } finally {
+    pushing = false
+    if (pushAgain) {
+      pushAgain = false
+      schedulePush()
+    }
+  }
 }
 
 /** 只读通道：这些不该触发刷新广播，否则读一次炸一次 */
@@ -934,7 +989,7 @@ app.whenReady().then(async () => {
             (report.error ? ` err=${report.error}` : '')
         )
         mainWindow?.webContents.send('sync:done', report)
-        if (report.ok && report.pulled > 0) broadcastDataChanged()
+        if (report.ok && report.pulled > 0) notifyWindowsChanged()
       })
       .catch((err) => console.error('[caldesk] auto-sync 异常:', (err as Error).message))
   }

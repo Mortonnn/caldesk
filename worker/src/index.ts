@@ -389,8 +389,19 @@ async function joinPairing(req: Request, env: Env): Promise<Response> {
     deviceId
   )
   if (existing && existing.status === 'approved') {
-    // 已经在同一个账号里：幂等，直接返回成功（手机重装/重试时会走到这里）
-    if (existing.account_id === pairing.account_id) return json({ ok: true, alreadyApproved: true })
+    // 已经在同一个账号里：幂等（手机重装 / 重试时会走到这里）
+    // 顺带把 accountId 给回去，手机据此完成入伙
+    if (existing.account_id === pairing.account_id) {
+      // 同时把 secret 更新成这次带来的那个：
+      // 手机重装后本地身份会重新生成，secret 对不上会导致 401
+      const { salt, hash } = await makeCredential(accountSecret)
+      await env.DB.prepare(
+        `UPDATE devices SET name = ?, secret_salt = ?, secret_hash = ? WHERE device_id = ?`
+      )
+        .bind(deviceName, salt, hash, deviceId)
+        .run()
+      return json({ ok: true, alreadyApproved: true, accountId: existing.account_id })
+    }
     return fail(409, 'device_exists', '该设备已加入其它账号')
   }
 
