@@ -11,7 +11,10 @@ import { AnimatePresence, motion } from 'framer-motion'
 import type { CalendarEvent, CalendarMeta, DayCell, EventOccurrence } from '@shared/types'
 import { isDoneLine, lineText, splitLines } from '@shared/types'
 import { fromDayNumber, toDayNumber, weekdayOf } from '@shared/rrule'
+import { DEFAULT_SERVER_URL } from './mobileIdentity'
 import { data } from './data'
+import type { DeviceListResult } from './data'
+import { GlassDock } from './GlassDock'
 import { MobileSetup } from './MobileSetup'
 import './mobile.css'
 
@@ -110,6 +113,8 @@ export default function MobileApp(): React.JSX.Element {
   const [toast, setToast] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
   const [draft, setDraft] = useState('')
+  const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL)
+  const [devices, setDevices] = useState<DeviceListResult['devices']>([])
 
   const say = useCallback((msg: string) => {
     setToast(msg)
@@ -130,6 +135,10 @@ export default function MobileApp(): React.JSX.Element {
         setCalendars(list.data)
         setCalId(list.data[0]?.id ?? '')
       }
+      setServerUrl(st.serverUrl || DEFAULT_SERVER_URL)
+      // 设备列表：任何设备都能看到当前账号下配对的所有设备
+      const devs = await data.sync.devices()
+      if (devs.ok) setDevices(devs.data.devices)
       setReady(true)
     })()
   }, [])
@@ -163,6 +172,44 @@ export default function MobileApp(): React.JSX.Element {
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
   }, [paired, calId, date, loadRange])
+
+  /**
+   * 热更新：每隔几秒探一次服务端的水位。
+   *
+   * 电脑改完任务，手机不用退出重进就能看到。
+   * 水位没变就什么都不做，不浪费流量。
+   */
+  useEffect(() => {
+    if (!ready || !paired || !calId) return
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let known = 0
+
+    const tick = async (): Promise<void> => {
+      if (stopped) return
+      try {
+        const probe = await data.sync.changes()
+        if (!stopped && probe.remote > 0) {
+          if (known === 0) {
+            // 第一次探针只记录基准，不触发刷新
+            known = probe.remote
+          } else if (probe.remote > known) {
+            known = probe.remote
+            if (!stopped) await loadRange(calId, date)
+          }
+        }
+      } catch {
+        /* 网络不通就等下一轮 */
+      }
+      if (!stopped) timer = setTimeout(() => void tick(), 5000)
+    }
+
+    void tick()
+    return () => {
+      stopped = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [ready, paired, calId, date, loadRange])
 
   /* ------------------------------ 当天内容 ------------------------------ */
 
@@ -458,19 +505,25 @@ export default function MobileApp(): React.JSX.Element {
         {tab === 'settings' && (
           <div className="m-list">
             <div className="m-group">
-              <div className="m-group-date">同步</div>
-              <div className="m-group-item">
-                <div className="m-group-main">
-                  <div className="m-group-title">服务器</div>
-                  <div className="m-group-sub">caldesk.ilikeu.cc.cd</div>
-                </div>
-              </div>
-              <div className="m-group-item">
-                <div className="m-group-main">
-                  <div className="m-group-title">这台设备</div>
-                  <div className="m-group-sub">已加入账号，可在电脑端撤销</div>
-                </div>
-              </div>
+              <div className="m-group-date">已配对设备</div>
+              {devices.length === 0 ? (
+                <div className="m-empty">读不到设备列表</div>
+              ) : (
+                devices.map((d) => (
+                  <div className="m-group-item" key={d.deviceId}>
+                    <div className="m-group-main">
+                      <div className="m-group-title">
+                        {d.name || d.deviceId.slice(0, 8)}
+                        {d.current ? '（本机）' : ''}
+                      </div>
+                      <div className="m-group-sub">
+                        {d.status === 'approved' ? '已授权' : d.status}
+                        {d.lastSeenAt ? ` · ${new Date(d.lastSeenAt).toLocaleString('zh-CN')}` : ''}
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
             <div className="m-group">
               <div className="m-group-date">日历</div>
@@ -483,39 +536,29 @@ export default function MobileApp(): React.JSX.Element {
                 </div>
               ))}
             </div>
+            <div className="m-group">
+              <div className="m-group-date">服务器</div>
+              <div className="m-group-item">
+                <div className="m-group-main">
+                  <div className="m-group-title">{serverUrl.replace(/^https?:\/\//, '')}</div>
+                </div>
+              </div>
+            </div>
           </div>
         )}
       </div>
 
-      {/* 底部导航 */}
-      <nav className="m-nav">
-        <button
-          className={`m-nav-item ${tab === 'month' ? 'm-nav-active' : ''}`}
-          onClick={() => setTab('month')}
-        >
-          {Icon.calendar}
-          日历
-        </button>
-        <button
-          className={`m-nav-item ${tab === 'upcoming' ? 'm-nav-active' : ''}`}
-          onClick={() => setTab('upcoming')}
-        >
-          {Icon.clock}
-          即将
-        </button>
-        <div className="m-nav-fab">
-          <button className="m-fab" onClick={() => setAdding(true)} aria-label="添加任务">
-            {Icon.plus}
-          </button>
-        </div>
-        <button
-          className={`m-nav-item ${tab === 'settings' ? 'm-nav-active' : ''}`}
-          onClick={() => setTab('settings')}
-        >
-          {Icon.settings}
-          设置
-        </button>
-      </nav>
+      {/* 液态玻璃底栏 */}
+      <GlassDock
+        items={[
+          { key: 'month', label: '日历', icon: Icon.calendar },
+          { key: 'upcoming', label: '即将', icon: Icon.clock },
+          { key: 'settings', label: '设置', icon: Icon.settings }
+        ]}
+        active={tab}
+        onSelect={(k) => setTab(k as Tab)}
+        onAdd={() => setAdding(true)}
+      />
 
       {/* 添加任务弹层 */}
       <AnimatePresence>

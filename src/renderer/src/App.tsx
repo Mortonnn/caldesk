@@ -31,21 +31,6 @@ import { QrCode } from './QrCode'
 
 const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日']
 
-const KIND_LABEL: Record<EventKind, string> = {
-  task: '任务',
-  reminder: '提醒',
-  countdown: '倒数日'
-}
-
-/**
- * 列表里显示的类别：任务到底是不是"重复任务"取决于有没有 RRULE，
- * 而不是取决于 kind。这样"不重复任务"就是真正独立的一类，默认创建的就是它。
- */
-function kindLabel(kind: EventKind, rrule: string | null): string {
-  if (kind === 'task') return rrule ? '重复任务' : '任务'
-  return KIND_LABEL[kind]
-}
-
 type RepeatPreset = 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly' | 'custom'
 
 const REPEAT_LABEL: Record<RepeatPreset, string> = {
@@ -147,7 +132,12 @@ export default function App(): React.JSX.Element {
   const [syncPaired, setSyncPaired] = useState(false)
   const [syncInvite, setSyncInvite] = useState('')
   const [syncAccountName, setSyncAccountName] = useState('')
-  const [pairInfo, setPairInfo] = useState<{ pairId: string; code: string; qr: string } | null>(null)
+  const [pairInfo, setPairInfo] = useState<{
+    pairId: string
+    code: string
+    qr: string
+    mode: 'qr' | 'code'
+  } | null>(null)
   const [pairPending, setPairPending] = useState<
     Array<{ deviceId: string; name: string; createdAt: number }>
   >([])
@@ -260,9 +250,22 @@ export default function App(): React.JSX.Element {
       setSyncMsg(`无法配对：${res.error}`)
       return
     }
-    setPairInfo({ pairId: res.data.pairId, code: res.data.code, qr: res.data.qr })
+    setPairInfo({ pairId: res.data.pairId, code: res.data.code, qr: res.data.qr, mode: 'qr' })
     setPairPending([])
-    setSyncMsg('把二维码给手机扫，或手动输入配对码')
+    setSyncMsg('把二维码给手机扫')
+  }
+
+  /** 只显示配对码，手机手动输入 —— 没有摄像头/二维码不方便时用 */
+  async function startPairCode(): Promise<void> {
+    setSyncMsg('正在生成配对码…')
+    const res = await data.sync.pairStart()
+    if (!res.ok) {
+      setSyncMsg(`无法配对：${res.error}`)
+      return
+    }
+    setPairInfo({ pairId: res.data.pairId, code: res.data.code, qr: res.data.qr, mode: 'code' })
+    setPairPending([])
+    setSyncMsg('在手机上手动输入这个配对码')
   }
 
   /** 轮询待批准的设备 */
@@ -478,6 +481,38 @@ export default function App(): React.JSX.Element {
     })
   }, [activeCal, loadRange])
 
+  /**
+   * 热更新：定期问服务端"有没有新东西"。
+   *
+   * 之前只有本机改动才会刷新，别的设备（手机、AI、CLI）改完，
+   * 这边必须退出重进才看得到。现在探到水位变了就立刻拉一次。
+   */
+  useEffect(() => {
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const tick = async (): Promise<void> => {
+      if (stopped) return
+      try {
+        const probe = await data.sync.changes()
+        if (!stopped && probe.changed) {
+          // 有新东西：先同步进本地库，再重读当前视图
+          await data.sync.run()
+          if (!stopped && activeCal) await loadRange(activeCal)
+        }
+      } catch {
+        /* 网络不通就等下一轮 */
+      }
+      if (!stopped) timer = setTimeout(() => void tick(), 5000)
+    }
+
+    void tick()
+    return () => {
+      stopped = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [activeCal, loadRange])
+
   function applyCell(cell: DayCell): void {
     setCells((prev) => ({ ...prev, [cell.date]: cell.text }))
     setCellError(null)
@@ -619,6 +654,24 @@ export default function App(): React.JSX.Element {
 
   const selectedEvents = selected ? (eventsByDate[selected] ?? []) : []
   const selectedLines = selected ? splitLines(cells[selected] ?? '') : []
+
+  /**
+   * 任务和事件合并成一个列表。
+   *
+   * 用户视角它们是同一件事：都是"某天要做的事"，
+   * 区别只是任务只属于这一天，事件可以重复。
+   * 顺序：先事件（可重复的、有颜色的），再当天的普通任务。
+   */
+  const selectedItems = [
+    ...selectedEvents.map((occ) => ({
+      type: 'event' as const,
+      occ,
+      done: occ.done
+    })),
+    ...selectedLines
+      .map((text, index) => ({ type: 'line' as const, text, index, done: isDoneLine(text) }))
+      .filter((l) => l.text.trim().length > 0)
+  ]
 
   /* ------------------------------ 便签与搜索 ------------------------------ */
 
@@ -989,74 +1042,71 @@ export default function App(): React.JSX.Element {
                 </button>
               </header>
               <div className="detail-body">
-                {selectedEvents.length > 0 && (
-                  <div className="ev-section">
-                    {selectedEvents.map((occ) => (
+                {/* 任务和事件是同一件事：任务 = 只属于这一天，事件 = 可以重复。
+                    这里合成一个列表，不再分成两段。 */}
+                {selectedItems.length === 0 ? (
+                  <p className="empty">这天还没有内容</p>
+                ) : (
+                  selectedItems.map((item) =>
+                    item.type === 'event' ? (
                       <motion.div
-                        key={`${occ.event.id}-${occ.date}`}
+                        key={`ev-${item.occ.event.id}-${item.occ.date}`}
                         layout
-                        className={`event-row ${occ.done ? 'done' : ''}`}
+                        className={`task-row ${item.occ.done ? 'done' : ''}`}
                       >
-                        {occ.event.kind === 'countdown' ? (
+                        {item.occ.event.kind === 'countdown' ? (
                           <span className="checkbox-spacer" />
                         ) : (
                           <button
-                            className={`checkbox ${occ.done ? 'checked' : ''}`}
-                            aria-label={occ.done ? '标记为未完成' : '标记为完成'}
-                            onClick={() => void toggleEventDone(occ)}
+                            className={`checkbox ${item.occ.done ? 'checked' : ''}`}
+                            aria-label={item.occ.done ? '标记为未完成' : '标记为完成'}
+                            onClick={() => void toggleEventDone(item.occ)}
                           />
                         )}
-                        <span className="ev-kind">{kindLabel(occ.event.kind, occ.event.rrule)}</span>
-                        <span className="task-text">{occ.event.title}</span>
-                        {occ.event.kind === 'countdown' && (
+                        <span className="task-text">{item.occ.event.title}</span>
+                        {item.occ.event.kind === 'countdown' && (
                           <span className="ev-meta">
-                            {countdownText(occ.event.targetDate, occ.date)}
+                            {countdownText(item.occ.event.targetDate, item.occ.date)}
                           </span>
                         )}
-                        {occ.event.rrule && (
-                          <span className="ev-meta">{describeRrule(occ.event.rrule)}</span>
+                        {item.occ.event.rrule ? (
+                          <span className="ev-meta">{describeRrule(item.occ.event.rrule)}</span>
+                        ) : (
+                          <span className="ev-meta">当天</span>
                         )}
                         <button
                           className="task-del"
                           aria-label="删除事件"
                           title="删除事件"
-                          onClick={() => void requestRemoveEvent(occ)}
+                          onClick={() => void requestRemoveEvent(item.occ)}
                         >
                           {'\u00D7'}
                         </button>
                       </motion.div>
-                    ))}
-                  </div>
-                )}
-
-                {selectedLines.length === 0 && selectedEvents.length === 0 ? (
-                  <p className="empty">这天还没有内容</p>
-                ) : (
-                  selectedLines.map((line, i) => {
-                    const done = isDoneLine(line)
-                    return (
+                    ) : (
                       <motion.div
-                        key={`${i}-${line}`}
+                        key={`ln-${item.index}-${item.text}`}
                         layout
-                        className={`task-row ${done ? 'done' : ''}`}
+                        className={`task-row ${item.done ? 'done' : ''}`}
                       >
                         <button
-                          className={`checkbox ${done ? 'checked' : ''}`}
-                          aria-label={done ? '标记为未完成' : '标记为完成'}
-                          onClick={() => void toggleLine(selected, i, !done)}
+                          className={`checkbox ${item.done ? 'checked' : ''}`}
+                          aria-label={item.done ? '标记为未完成' : '标记为完成'}
+                          onClick={() => void toggleLine(selected, item.index, !item.done)}
                         />
-                        <span className="task-text">{lineText(line)}</span>
+                        <span className="task-text">{lineText(item.text)}</span>
+                        <span className="ev-meta">当天</span>
                         <button
                           className="task-del"
                           aria-label="删除这条任务"
                           title="删除这条任务"
-                          onClick={() => void removeLine(selected, i)}
+                          onClick={() => void removeLine(selected, item.index)}
                         >
                           {'\u00D7'}
                         </button>
                       </motion.div>
                     )
-                  })
+                  )
                 )}
               </div>
               <footer>
@@ -1071,14 +1121,14 @@ export default function App(): React.JSX.Element {
                   }}
                 />
 
-                {/* 重复事件 / 提醒 / 倒数日默认折叠：日常只用当天任务，别一进来就被表单压住 */}
+                {/* 事件 = 可以重复的任务。默认折叠：日常只用当天任务输入框 */}
                 <button
                   className={`event-toggle ${eventOpen ? 'open' : ''}`}
                   onClick={() => setEventOpen((v) => !v)}
                   aria-expanded={eventOpen}
                 >
                   <span className="event-toggle-chev">{'\u203A'}</span>
-                  {eventOpen ? '收起事件选项' : '＋ 事件 / 提醒 / 倒数日'}
+                  {eventOpen ? '收起事件选项' : '展开事件选项'}
                 </button>
 
                 <AnimatePresence initial={false}>
@@ -1103,19 +1153,6 @@ export default function App(): React.JSX.Element {
                       <div className="event-opts">
                         <select
                           className="mini-select"
-                          value={eventKind}
-                          onChange={(e) => {
-                            const next = e.target.value as EventKind
-                            setEventKind(next)
-                            if (next === 'countdown') setEventRepeat('none')
-                          }}
-                        >
-                          <option value="task">任务</option>
-                          <option value="reminder">提醒</option>
-                          <option value="countdown">倒数日</option>
-                        </select>
-                        <select
-                          className="mini-select"
                           value={eventRepeat}
                           disabled={eventKind === 'countdown'}
                           title={eventKind === 'countdown' ? '倒数日不支持重复' : '重复规则'}
@@ -1126,6 +1163,19 @@ export default function App(): React.JSX.Element {
                               {REPEAT_LABEL[k]}
                             </option>
                           ))}
+                        </select>
+                        <select
+                          className="mini-select"
+                          value={eventKind}
+                          onChange={(e) => {
+                            const next = e.target.value as EventKind
+                            setEventKind(next)
+                            if (next === 'countdown') setEventRepeat('none')
+                          }}
+                        >
+                          <option value="task">任务</option>
+                          <option value="reminder">提醒</option>
+                          <option value="countdown">倒数日</option>
                         </select>
                       </div>
                       {eventRepeat === 'custom' && (
@@ -1150,7 +1200,9 @@ export default function App(): React.JSX.Element {
                   <p className="cal-error">{cellError ?? eventError}</p>
                 ) : (
                   <span className="hint">
-                    {eventOpen ? '事件会显示在日历上，可设重复' : '任务只属于这一天'}
+                    {eventOpen
+                      ? '事件会显示在日历上，可设重复'
+                      : '任务只属于这一天；展开事件选项可设重复'}
                   </span>
                 )}
               </footer>
@@ -1239,40 +1291,9 @@ export default function App(): React.JSX.Element {
                   </section>
 
                   <section className="set-block">
-                    <span className="pop-label">同步（Cloudflare）</span>
-                    <p className="pop-desc">
-                      留空即用作者的服务器 <code>{DEFAULT_SERVER_URL}</code>；自己部署的话填自己的地址。
-                    </p>
-                    <input
-                      className="task-input"
-                      placeholder={`服务器地址（留空 = ${DEFAULT_SERVER_URL}）`}
-                      value={syncUrl}
-                      onChange={(e) => setSyncUrl(e.target.value)}
-                    />
-                    <input
-                      className="task-input"
-                      placeholder="这台设备的名字"
-                      value={syncDeviceName}
-                      onChange={(e) => setSyncDeviceName(e.target.value)}
-                    />
-                    <div className="note-actions">
-                      <button className="ghost" onClick={() => void saveSyncServer()}>
-                        保存
-                      </button>
-                      <button
-                        className="primary-btn"
-                        disabled={syncing || !syncPaired}
-                        onClick={() => void runSyncNow()}
-                      >
-                        {syncing ? '同步中…' : '立即同步'}
-                      </button>
-                    </div>
-
+                    <span className="pop-label">同步</span>
                     {!syncPaired ? (
                       <div className="sync-create">
-                        <p className="pop-desc">
-                          第一次用要先建一个账号，这台电脑就是账号的第一个设备。
-                        </p>
                         <input
                           className="task-input"
                           placeholder="账号名称"
@@ -1285,66 +1306,94 @@ export default function App(): React.JSX.Element {
                           value={syncInvite}
                           onChange={(e) => setSyncInvite(e.target.value)}
                         />
-                        <button
-                          className="primary-btn"
-                          onClick={() => void createSyncAccount()}
-                        >
+                        <button className="primary-btn" onClick={() => void createSyncAccount()}>
                           创建账号
                         </button>
                       </div>
                     ) : (
                       <div className="sync-paired">
-                        <p className="pop-desc">
-                          账号 <code>{syncAccountId.slice(0, 8)}…</code>
-                          {syncOnline > 0 && ` · 当前在线 ${syncOnline} 台设备`}
-                        </p>
-                        <button className="ghost" onClick={() => void startPair()}>
-                          手机配对（生成二维码）
-                        </button>
+                        <div className="sync-server">
+                          <input
+                            className="task-input"
+                            placeholder={`服务器地址（留空 = ${DEFAULT_SERVER_URL}）`}
+                            value={syncUrl}
+                            autoCapitalize="none"
+                            autoCorrect="off"
+                            onChange={(e) => setSyncUrl(e.target.value)}
+                          />
+                          <button className="ghost" onClick={() => void saveSyncServer()}>
+                            保存
+                          </button>
+                        </div>
+                        <div className="note-actions">
+                          <button className="ghost" onClick={() => void startPair()}>
+                            二维码配对
+                          </button>
+                          <button className="ghost" onClick={() => void startPairCode()}>
+                            配对码配对
+                          </button>
+                          <button
+                            className="primary-btn"
+                            disabled={syncing}
+                            onClick={() => void runSyncNow()}
+                          >
+                            {syncing ? '同步中…' : '立即同步'}
+                          </button>
+                        </div>
 
                         {pairInfo && (
                           <div className="pair-box">
-                            <div className="pair-qr">
-                              <QrCode text={pairInfo.qr} size={176} />
-                            </div>
-                            <p className="pop-desc">
-                              配对码 <strong>{pairInfo.code}</strong>
-                              <br />
-                              手机扫上面的码，或手动输入这个配对码。
-                            </p>
-                            {pairPending.length > 0 ? (
+                            {pairInfo.mode === 'qr' ? (
+                              <div className="pair-qr">
+                                <QrCode text={pairInfo.qr} size={176} />
+                              </div>
+                            ) : (
+                              <div className="pair-code-big">{pairInfo.code}</div>
+                            )}
+                            {pairPending.length > 0 && (
                               <div className="pair-list">
-                                <p className="pop-desc">等批准：</p>
                                 {pairPending.map((d) => (
                                   <div key={d.deviceId} className="pair-row">
-                                    <span className="snap-label">{d.name || d.deviceId.slice(0, 8)}</span>
-                                    <button className="ghost" onClick={() => void approvePair(d.deviceId)}>
+                                    <span className="snap-label">
+                                      {d.name || d.deviceId.slice(0, 8)}
+                                    </span>
+                                    <button
+                                      className="ghost"
+                                      onClick={() => void approvePair(d.deviceId)}
+                                    >
                                       批准
                                     </button>
-                                    <button className="ghost" onClick={() => void rejectPair(d.deviceId)}>
+                                    <button
+                                      className="ghost"
+                                      onClick={() => void rejectPair(d.deviceId)}
+                                    >
                                       拒绝
                                     </button>
                                   </div>
                                 ))}
                               </div>
-                            ) : (
-                              <p className="pop-desc">还没有待批准的设备</p>
                             )}
                           </div>
                         )}
 
                         {deviceList.length > 0 && (
                           <div className="pair-list">
-                            <p className="pop-desc">已配对设备：</p>
+                            <div className="pop-row">
+                              <span className="pop-label-row">
+                                已配对设备{syncOnline > 0 ? ` · ${syncOnline} 台在线` : ''}
+                              </span>
+                            </div>
                             {deviceList.map((d) => (
                               <div key={d.deviceId} className="pair-row">
                                 <span className="snap-label">
                                   {d.name || d.deviceId.slice(0, 8)}
                                   {d.current ? '（本机）' : ''}
-                                  {d.status !== 'approved' ? `（${d.status}）` : ''}
                                 </span>
                                 {!d.current && (
-                                  <button className="ghost" onClick={() => void revokeDevice(d.deviceId)}>
+                                  <button
+                                    className="ghost"
+                                    onClick={() => void revokeDevice(d.deviceId)}
+                                  >
                                     撤销
                                   </button>
                                 )}

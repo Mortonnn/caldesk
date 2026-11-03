@@ -1,7 +1,8 @@
 /**
- * 手机端首次配置页：扫码或手输配对码。
+ * 手机端首次配置页：扫二维码 / 输配对码。
  *
  * 与桌面端的设置面板完全分开：手机用整屏卡片 + 大按钮。
+ * 界面尽量少字 —— 能用按钮表达的就不写解释。
  */
 import { useState } from 'react'
 import { motion } from 'framer-motion'
@@ -27,13 +28,13 @@ export function MobileSetup({ onDone }: { onDone: () => void }): React.JSX.Eleme
         setError(res.error)
         return
       }
-      setStatus('申请已发出，等电脑批准…')
+      setStatus('等电脑批准…')
       for (let i = 0; i < 80; i += 1) {
         await new Promise((r) => setTimeout(r, 1500))
         const st = await data.sync.pairStatus(pairText)
         if (!st.ok) continue
         if (st.data.status === 'approved') {
-          setStatus('已批准，正在进入…')
+          setStatus('已批准')
           setTimeout(onDone, 500)
           return
         }
@@ -43,7 +44,7 @@ export function MobileSetup({ onDone }: { onDone: () => void }): React.JSX.Eleme
           return
         }
       }
-      setStatus('还在等电脑批准，请到电脑上点「批准」')
+      setStatus('还在等电脑批准')
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -64,8 +65,7 @@ export function MobileSetup({ onDone }: { onDone: () => void }): React.JSX.Eleme
   if (scanning) {
     return (
       <div className="m-setup">
-        <h1>扫电脑上的二维码</h1>
-        <p>在电脑「设置 → 同步 → 手机配对」里生成二维码。</p>
+        <h1>扫二维码</h1>
         <div className="m-scanner">
           <BarcodeScanner
             onCancel={() => setScanning(false)}
@@ -94,17 +94,30 @@ export function MobileSetup({ onDone }: { onDone: () => void }): React.JSX.Eleme
   return (
     <div className="m-setup">
       <h1>连接你的日历</h1>
-      <p>
-        扫电脑上的配对二维码，电脑批准后这台手机就能和它同步同一份数据。
-      </p>
 
       <button className="m-setup-btn" onClick={() => setScanning(true)}>
-        扫一扫配对二维码
+        扫二维码
       </button>
 
-      <label className="m-setup-label" style={{ marginTop: 18 }}>
-        Worker 地址（留空即用作者的服务器）
-      </label>
+      <div className="m-setup-divider">或</div>
+
+      <label className="m-setup-label">配对码</label>
+      <input
+        className="m-setup-input m-setup-code"
+        placeholder="6 位数字"
+        inputMode="numeric"
+        value={code}
+        onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+      />
+
+      <label className="m-setup-label">设备名</label>
+      <input
+        className="m-setup-input"
+        value={deviceName}
+        onChange={(e) => setDeviceName(e.target.value)}
+      />
+
+      <label className="m-setup-label">服务器</label>
       <input
         className="m-setup-input"
         placeholder={DEFAULT_SERVER_URL}
@@ -114,38 +127,16 @@ export function MobileSetup({ onDone }: { onDone: () => void }): React.JSX.Eleme
         onChange={(e) => setUrl(e.target.value)}
       />
 
-      <label className="m-setup-label">这台设备的名字</label>
-      <input
-        className="m-setup-input"
-        placeholder="我的手机"
-        value={deviceName}
-        onChange={(e) => setDeviceName(e.target.value)}
-      />
-
-      <label className="m-setup-label">配对码（电脑上显示的 6 位数字）</label>
-      <input
-        className="m-setup-input"
-        placeholder="123456"
-        inputMode="numeric"
-        value={code}
-        onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-      />
-
       {error && <p className="m-setup-error">{error}</p>}
       {status && <p className="m-setup-hint">{status}</p>}
 
       <button
         className="m-setup-btn"
-        disabled={busy}
+        disabled={busy || code.length !== 6}
         onClick={() => void joinByCode()}
       >
         {busy ? '等待批准…' : '用配对码加入'}
       </button>
-      <button className="m-setup-btn m-setup-btn-ghost" onClick={() => setScanning(true)}>
-        改用扫码
-      </button>
-
-      <p className="m-setup-hint">配对码 5 分钟内有效，只能用一次。</p>
     </div>
   )
 }

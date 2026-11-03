@@ -1227,6 +1227,32 @@ export function getMeta(key: string): string | null {
   return row ? String(row.value) : null
 }
 
+/**
+ * 本地库的"变更水位"：所有业务表里最新的 updated_at。
+ *
+ * 用来做热更新轮询：各端每几秒问一次服务端"你那边变了吗"，
+ * 变了才真的去拉数据，避免每次都搬整个月。
+ *
+ * 表名必须和同步的 TABLES 一致（少了 event_done/event_skip 会导致
+ * 远端水位永远大于本地水位，每 5 秒都白同步一次）。
+ */
+export function localChangeToken(): number {
+  const tables = ['calendars', 'day_cells', 'events', 'notes', 'event_done', 'event_skip']
+  let max = 0
+  for (const t of tables) {
+    try {
+      const row = requireDb()
+        .prepare(`SELECT MAX(updated_at) AS m FROM ${t}`)
+        .get() as { m?: number | null } | undefined
+      const v = Number(row?.m ?? 0)
+      if (Number.isFinite(v) && v > max) max = v
+    } catch {
+      /* 表还没建好，跳过 */
+    }
+  }
+  return max
+}
+
 export function setMeta(key: string, value: string): void {
   requireDb()
     .prepare(

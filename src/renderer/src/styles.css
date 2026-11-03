@@ -1278,6 +1278,28 @@ button {
   font-size: 11px;
 }
 
+/* 服务器地址一行 */
+.sync-server {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.sync-server .task-input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 配对码：大字，手机上照着输 */
+.pair-code-big {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 42px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  padding-left: 0.22em;
+  user-select: all;
+}
+
 .set-head {
   display: flex;
   align-items: baseline;

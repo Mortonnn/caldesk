@@ -12,6 +12,7 @@ import {
   deleteEvent,
   deleteNote,
   getDayCell,
+  getMeta,
   getNote,
   initDb,
   listCalendars,
@@ -19,6 +20,7 @@ import {
   listNotes,
   listOccurrences,
   listSnapshots,
+  localChangeToken,
   restoreSnapshot,
   search,
   setDayCellText,
@@ -38,6 +40,7 @@ import {
   listDevices,
   listPendingDevices,
   rejectDevice,
+  remoteChangeToken,
   revokeDevice,
   startPairing,
   syncNow
@@ -648,6 +651,25 @@ handle('notes:delete', (id: string) => {
 handle('search:query', (query: string, calendarId?: string, limit?: number) =>
   search(query, calendarId, limit)
 )
+
+/**
+ * 变更探针：桌面端问"远端有没有新东西"。
+ *
+ * 远端水位和服务端比：本地记住上次看到的水位（sync:remoteToken），
+ * 服务端的数字变大了就说明有东西要拉。
+ * 不用拿本地水位比 —— 本地可能有还没推上去的行，比了会永远不一样。
+ */
+handle('sync:changes', async () => {
+  const id = identityOf()
+  if (!isPaired(id)) return { local: localChangeToken(), remote: 0, changed: false }
+  try {
+    const remote = await remoteChangeToken(id)
+    const known = Number(getMeta('sync:remoteToken') ?? 0)
+    return { local: localChangeToken(), remote, changed: remote > known }
+  } catch {
+    return { local: localChangeToken(), remote: 0, changed: false }
+  }
+})
 
 /* 本地回滚：list/clear 直接返回数据（渲染层按数组/数字消费），restore 走统一包装 */
 ipcMain.handle('snapshots:list', () => listSnapshots())

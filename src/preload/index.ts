@@ -159,6 +159,13 @@ const api = {
       >,
     revokeDevice: (deviceId: string) =>
       ipcRenderer.invoke('sync:revoke-device', deviceId) as Promise<IpcResult<boolean>>,
+    /** 变更探针：远端有没有新东西 */
+    changes: () =>
+      ipcRenderer.invoke('sync:changes') as Promise<{
+        local: number
+        remote: number
+        changed: boolean
+      }>,
     run: () =>
       ipcRenderer.invoke('sync:run') as Promise<{
         ok: boolean

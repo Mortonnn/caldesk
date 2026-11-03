@@ -28,9 +28,11 @@
   },
   "dependencies": {
     "@capacitor/android": "^8.6.0",
+    "@capacitor/camera": "^8.2.6",
     "@capacitor/core": "^8.6.0",
     "@modelcontextprotocol/sdk": "1.32.2",
     "date-fns": "4.4.0",
+    "jsqr": "^1.4.0",
     "qrcode": "^1.5.4",
     "zod": "4.6.7"
   },

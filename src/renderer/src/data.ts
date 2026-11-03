@@ -408,6 +408,11 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
         return res
       },
       revokeDevice: async () => ({ ok: false as const, error: '请在电脑上撤销设备' }),
+      /** 变更探针：手机每隔几秒问一次服务端"有没有新东西" */
+      changes: async () => {
+        const res = await req<{ token?: number }>('/api/changes')
+        return { local: 0, remote: Number(res.ok ? (res.data.token ?? 0) : 0), changed: false }
+      },
       run: () =>
         Promise.resolve({ ok: true, pushed: 0, pulled: 0, failed: 0, errors: [], tables: {} }).then(
           (r) => ({ ...r, error: undefined })
@@ -515,6 +520,7 @@ function createStub(): HostApi {
       pairReject: () => rejected<boolean>('拒绝设备'),
       devices: () => rejected<DeviceListResult>('设备列表'),
       revokeDevice: () => rejected<boolean>('撤销设备'),
+      changes: () => Promise.resolve({ local: 0, remote: 0, changed: false }),
       run: () => Promise.resolve({ ok: false, pushed: 0, pulled: 0, failed: 0, error: '未接入同步' }),
       onDone: () => () => {}
     },

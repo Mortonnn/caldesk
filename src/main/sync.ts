@@ -72,6 +72,18 @@ export interface SyncOptions {
   full?: boolean
 }
 
+/**
+ * 问服务端"账号里最新的水位是多少"。
+ *
+ * 用来做热更新：渲染层每隔几秒探一次，
+ * 数字变了才真的去拉数据，否则什么都不做。
+ * 比每次都拉整月便宜得多。
+ */
+export async function remoteChangeToken(id: StoredIdentity): Promise<number> {
+  const res = await call<{ token?: number }>(id, '/api/changes')
+  return Number(res.token ?? 0)
+}
+
 export async function syncNow(id: StoredIdentity, options: SyncOptions = {}): Promise<SyncReport> {
   const full = options.full === true
   const report: SyncReport = {
@@ -163,6 +175,12 @@ export async function syncNow(id: StoredIdentity, options: SyncOptions = {}): Pr
     }
 
     setMeta('sync:lastAt', String(Date.now()))
+    // 记住这次看到的服务端水位：热更新探针靠它判断"有没有新东西"
+    try {
+      setMeta('sync:remoteToken', String(await remoteChangeToken(id)))
+    } catch {
+      /* 拿不到就算了，下次探针会重新探 */
+    }
     report.ok = true
     return report
   } catch (err) {

@@ -26,6 +26,15 @@
   --m-safe-top: env(safe-area-inset-top, 0px);
   --m-safe-bottom: env(safe-area-inset-bottom, 0px);
   --m-nav-h: 58px;
+
+  /* 液态玻璃 */
+  --m-glass-bg: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.62) 0%,
+    rgba(255, 255, 255, 0.42) 100%
+  );
+  --m-glass-edge: rgba(255, 255, 255, 0.7);
+  --m-glass-pill: rgba(255, 255, 255, 0.72);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -40,6 +49,15 @@
     --m-accent: #5b8cff;
     --m-accent-soft: rgba(91, 140, 255, 0.16);
     --m-danger: #ff6369;
+
+    /* 深色下玻璃要更透、更有蓝调，不然会糊成一块灰 */
+    --m-glass-bg: linear-gradient(
+      180deg,
+      rgba(58, 66, 84, 0.55) 0%,
+      rgba(30, 34, 44, 0.42) 100%
+    );
+    --m-glass-edge: rgba(255, 255, 255, 0.16);
+    --m-glass-pill: rgba(255, 255, 255, 0.14);
   }
 }
 
@@ -168,56 +186,144 @@ textarea {
   min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding-bottom: calc(var(--m-safe-bottom) + 8px);
+  /* 底部给浮起来的玻璃 dock 让位 */
+  padding-bottom: calc(var(--m-safe-bottom) + 92px);
 }
 
-/* 底部导航 */
-.m-nav {
-  flex: none;
+/* ------------------------------ 液态玻璃底栏 ------------------------------ */
+
+/* 浮在内容之上：这样 backdrop-filter 才能把背后的卡片/文字揉进玻璃里 */
+.m-dock-wrap {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 60;
+  padding: 0 10px calc(var(--m-safe-bottom) + 10px);
+  pointer-events: none;
+}
+
+/* 整条 dock：左边 3/4 玻璃导航，右边 1/4 圆钮 */
+.m-dock {
   display: flex;
-  height: calc(var(--m-nav-h) + var(--m-safe-bottom));
-  padding-bottom: var(--m-safe-bottom);
-  background: var(--m-surface);
-  border-top: 1px solid var(--m-stroke);
+  align-items: center;
+  gap: 10px;
+  pointer-events: auto;
+  transform-origin: center bottom;
 }
 
-.m-nav-item {
+/* 玻璃面板本体 */
+.m-dock-glass {
+  position: relative;
+  flex: 3;
+  min-width: 0;
+  height: 58px;
+  display: flex;
+  align-items: stretch;
+  border-radius: 26px;
+  overflow: hidden;
+  isolation: isolate;
+
+  /* 玻璃：真的把背后的东西揉成一片 */
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+  backdrop-filter: blur(22px) saturate(180%);
+
+  /* 厚度感：半透明渐变 */
+  background: var(--m-glass-bg);
+
+  /* 边缘折射 */
+  box-shadow:
+    inset 0 1px 0 var(--m-glass-edge),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.06),
+    0 10px 30px rgba(0, 0, 0, 0.16);
+}
+
+/* 顶部一道高光，玻璃的"厚度"来源 */
+.m-dock-glass::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.28) 0%,
+    rgba(255, 255, 255, 0.06) 38%,
+    rgba(255, 255, 255, 0) 62%
+  );
+}
+
+/* 跟手滑动的液态药丸 */
+.m-dock-pill {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 0;
+  z-index: 0;
+  border-radius: 20px;
+  background: var(--m-glass-pill);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    0 3px 12px rgba(0, 0, 0, 0.12);
+  pointer-events: none;
+}
+
+/* 每个图标 */
+.m-dock-item {
+  position: relative;
+  z-index: 1;
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 3px;
-  font-size: 10.5px;
+  gap: 2px;
   color: var(--m-text-3);
-  transition: color 0.15s;
+  transition: color 0.18s ease;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.m-nav-item.m-nav-active {
+.m-dock-item.m-dock-item-on {
   color: var(--m-accent);
 }
 
-.m-nav-item svg {
-  width: 22px;
-  height: 22px;
+.m-dock-icon {
+  display: grid;
+  place-items: center;
 }
 
-.m-nav-fab {
-  flex: none;
-  width: 62px;
+.m-dock-icon svg {
+  width: 21px;
+  height: 21px;
+}
+
+.m-dock-label {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  opacity: 0.9;
+}
+
+/* 右侧 1/4：圆形 + */
+.m-dock-add {
+  flex: 1;
   display: grid;
   place-items: center;
 }
 
 .m-fab {
-  width: 48px;
-  height: 48px;
+  width: 54px;
+  height: 54px;
   border-radius: 50%;
   background: var(--m-accent);
   color: #fff;
   display: grid;
   place-items: center;
-  box-shadow: 0 6px 16px rgba(47, 111, 237, 0.35);
+  box-shadow:
+    0 8px 20px rgba(47, 111, 237, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  -webkit-tap-highlight-color: transparent;
 }
 
 .m-fab svg {
@@ -809,4 +915,68 @@ textarea {
   color: #fff;
   font-size: 14px;
   backdrop-filter: blur(8px);
+}
+
+/* 原生相机模式：不用黑底，展示一张拍回来的照片 */
+.m-scanner {
+  background: var(--m-surface-2);
+}
+
+.m-scanner-placeholder {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  text-align: center;
+  color: var(--m-text-3);
+  font-size: 14px;
+}
+
+.m-scanner-shot {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.m-scanner-shoot {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  height: 42px;
+  padding: 0 22px;
+  border-radius: 999px;
+  background: var(--m-accent);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 650;
+  box-shadow: 0 6px 18px rgba(47, 111, 237, 0.4);
+}
+
+.m-scanner-shoot:disabled {
+  opacity: 0.6;
+}
+
+.m-setup-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--m-text-3);
+  font-size: 12px;
+  margin: 16px 0;
+}
+
+.m-setup-divider::before,
+.m-setup-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--m-stroke);
+}
+
+.m-setup-code {
+  letter-spacing: 0.35em;
+  font-size: 20px;
+  font-weight: 600;
+  text-align: center;
 }

@@ -772,6 +772,25 @@ async function handleRest(req: Request, url: URL, env: Env, auth: AuthedDevice):
   const accountId = auth.accountId
   const path = url.pathname
 
+  /**
+   * 轻量变更探针：只回一个"账号内最新 updated_at"。
+   *
+   * 客户端拿它跟本地记住的 token 比：
+   *   - 一样 → 没有新东西，什么都不用拉；
+   *   - 不一样 → 再去拉具体数据。
+   *
+   * 这样各端可以每隔几秒问一次，不用每次都把整个月的数据搬一遍。
+   */
+  if (path === '/api/changes' && req.method === 'GET') {
+    const { results } = await env.DB.prepare(
+      `SELECT MAX(updated_at) AS token FROM rows WHERE account_id = ?`
+    )
+      .bind(accountId)
+      .all<{ token: number | null }>()
+    const token = Number(results?.[0]?.token ?? 0)
+    return json({ token, at: Date.now() })
+  }
+
   if (path === '/api/calendars' && req.method === 'GET') {
     const rows = (await loadTable(env, accountId, 'calendars')).filter((r) => !r.deletedAt)
     rows.sort((a, b) => Number(a.sort ?? 0) - Number(b.sort ?? 0))
