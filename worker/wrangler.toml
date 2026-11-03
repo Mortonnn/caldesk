@@ -12,5 +12,10 @@ database_id = "fbf5eb0b-3c5d-4726-85ba-511410db0d6f"
 # 建表不需要手工执行 SQL：Worker 首次请求时会跑 src/schema.ts 里的
 # CREATE TABLE IF NOT EXISTS（每个 isolate 一次）。
 
-# 本地开发：worker/.dev.vars 里写 SYNC_TOKEN=xxx（该文件已被 .gitignore 排除）
-# 线上：在 Cloudflare 控制台 Worker → 设置 → 变量和密钥 里加加密变量 SYNC_TOKEN
+# 鉴权用的是「每设备一套凭据」（Authorization: Bearer <deviceId>.<secretHex>），
+# 不是共享 token，所以这里没有 SYNC_TOKEN。
+#
+# INSTANCE_INVITE 是可选的「邀请码」：设置后只有带对邀请码才能 /account/create
+# 建账号（单租户私有部署）；不设置则允许任何人自建账号。
+# 本地开发：worker/.dev.vars 里写 INSTANCE_INVITE=xxx（该文件已被 .gitignore 排除）
+# 线上：在 Cloudflare 控制台 Worker → 设置 → 变量和密钥 里加 INSTANCE_INVITE

@@ -6,23 +6,29 @@
  * 语句全部是 IF NOT EXISTS，重复执行无副作用；每个 isolate 只跑一次。
  *
  * 数据模型说明：
- * - accounts：一个账号 = 一份加密数据的归属者（多账号隔离的根）
+ * - accounts：一个账号 = 一份数据的归属者（多账号隔离的根）。
+ *              服务端存明文，encrypted 列只作历史兼容，不再写入也不再读取。
  * - devices ：账号下的设备，凭 secret_salt + sha256(salt||secret) 认人，
  *              status 走 pending → approved / revoked 的配对流程
  * - pairings ：一次性配对码（6 位数字，5 分钟有效），授权端生成、新设备消费
- * - rows     ：所有集合共用一张表，payload 是客户端加密后的不透明字符串，
- *              服务端永远看不到明文；主键 (tbl, id) 与旧版保持一致
+ * - rows     ：所有集合共用一张表，payload 是整行的明文 JSON 字符串，
+ *              服务端不加密、不改写；主键 (tbl, account_id, id) —— 带上
+ *              account_id 是为了让不同账号可以用同一个行 id 而互不干扰
  */
 
 export interface D1Like {
-  prepare(sql: string): { run(): Promise<unknown> }
+  prepare(sql: string): {
+    run(): Promise<unknown>
+    all<T = unknown>(): Promise<{ results: T[] }>
+  }
+  batch?(statements: Array<{ run(): Promise<unknown> }>): Promise<unknown>
 }
 
 const SCHEMA: string[] = [
   `CREATE TABLE IF NOT EXISTS accounts (
      id         TEXT    PRIMARY KEY,
      name       TEXT    NOT NULL DEFAULT '',
-     encrypted  INTEGER NOT NULL DEFAULT 1,
+     encrypted  INTEGER NOT NULL DEFAULT 0,
      created_at INTEGER NOT NULL
    )`,
   `CREATE TABLE IF NOT EXISTS devices (
@@ -45,6 +51,7 @@ const SCHEMA: string[] = [
      expires_at INTEGER NOT NULL,
      status     TEXT    NOT NULL DEFAULT 'open'
    )`,
+  `CREATE INDEX IF NOT EXISTS idx_pairings_account ON pairings (account_id)`,
   `CREATE TABLE IF NOT EXISTS rows (
      tbl        TEXT    NOT NULL,
      id         TEXT    NOT NULL,
@@ -52,9 +59,10 @@ const SCHEMA: string[] = [
      updated_at INTEGER NOT NULL,
      deleted_at INTEGER,
      payload    TEXT    NOT NULL,
-     PRIMARY KEY (tbl, id)
+     PRIMARY KEY (tbl, account_id, id)
    )`,
-  `CREATE INDEX IF NOT EXISTS idx_rows_tbl_updated ON rows (tbl, updated_at)`
+  `CREATE INDEX IF NOT EXISTS idx_rows_tbl_updated ON rows (tbl, updated_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_rows_account_tbl ON rows (account_id, tbl, updated_at)`
 ]
 
 let ready = false
@@ -64,5 +72,62 @@ export async function ensureSchema(db: D1Like): Promise<void> {
   for (const sql of SCHEMA) {
     await db.prepare(sql).run()
   }
+  await migrateRowsPrimaryKey(db)
   ready = true
+}
+
+/**
+ * 旧库里的 rows 主键是 (tbl, id)：不同账号用同一个行 id 会撞在一起，
+ * 后写的那条会被 LWW 守卫吞掉 —— 账号之间就互相丢数据了。
+ * 而且新代码用 ON CONFLICT(tbl, account_id, id)，在旧主键上会直接报错。
+ *
+ * 这里把老表搬成新表（主键带上 account_id）。老数据本身是端到端加密时代的
+ * 密文，客户端已经不再需要它，搬迁只是保持"别丢行"，不做任何解码。
+ */
+async function migrateRowsPrimaryKey(db: D1Like): Promise<void> {
+  const { results } = await db
+    .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'rows'`)
+    .all<{ sql: string | null }>()
+
+  const current = results?.[0]?.sql ?? ''
+  if (!current) return // 表刚建好（主键已经正确），什么都不用做
+  if (/PRIMARY KEY\s*\(\s*tbl\s*,\s*account_id\s*,\s*id\s*\)/i.test(current)) return
+
+  const steps = [
+    `DROP TABLE IF EXISTS rows_migrate`,
+    `CREATE TABLE rows_migrate (
+       tbl        TEXT    NOT NULL,
+       id         TEXT    NOT NULL,
+       account_id TEXT    NOT NULL,
+       updated_at INTEGER NOT NULL,
+       deleted_at INTEGER,
+       payload    TEXT    NOT NULL,
+       PRIMARY KEY (tbl, account_id, id)
+     )`,
+    `INSERT OR IGNORE INTO rows_migrate (tbl, id, account_id, updated_at, deleted_at, payload)
+     SELECT tbl, id, account_id, updated_at, deleted_at, payload FROM rows`,
+    `DROP TABLE rows`,
+    `ALTER TABLE rows_migrate RENAME TO rows`,
+    `CREATE INDEX IF NOT EXISTS idx_rows_tbl_updated ON rows (tbl, updated_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_rows_account_tbl ON rows (account_id, tbl, updated_at)`
+  ]
+
+  try {
+    if (typeof db.batch === 'function') {
+      // 一次事务搬完，中途失败不会留下半张表
+      await db.batch(steps.map((sql) => db.prepare(sql)))
+    } else {
+      for (const sql of steps) await db.prepare(sql).run()
+    }
+  } catch (err) {
+    // 多个 isolate 可能同时迁移：后到的那个会撞上已经搬完的表。
+    // 这种情况下重新看一眼当前主键，已经是新主键就算成功。
+    const check = await db
+      .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'rows'`)
+      .all<{ sql: string | null }>()
+    const sql = check.results?.[0]?.sql ?? ''
+    if (!/PRIMARY KEY\s*\(\s*tbl\s*,\s*account_id\s*,\s*id\s*\)/i.test(sql)) {
+      throw err
+    }
+  }
 }
