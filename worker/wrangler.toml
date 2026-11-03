@@ -1,0 +1,13 @@
+name = "caldesk-sync"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "caldesk"
+database_id = "00000000-0000-0000-0000-000000000000"
+# 上面这个 id 只是占位：真实 id 用 `npx wrangler d1 create caldesk` 创建后会打印，
+# 把它填回来（或让 wrangler 自动写回本文件）。
+
+# 本地开发：worker/.dev.vars 里写 SYNC_TOKEN=xxx（该文件已被 .gitignore 排除）
+# 线上：npx wrangler secret put SYNC_TOKEN

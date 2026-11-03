@@ -1,0 +1,35 @@
+appId: app.caldesk.desktop
+productName: caldesk
+copyright: caldesk
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - out/**/*
+  - package.json
+  - bin/**/*
+  - build/**/*
+
+# CLI 与 MCP 桥需要随包分发，解压到 resources 下
+extraResources:
+  - from: bin
+    to: bin
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-setup.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: caldesk
+
+# 不签名（个人使用）；如需签名在此配置证书
+forceCodeSigning: false

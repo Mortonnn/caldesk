@@ -1,0 +1,32 @@
+{
+  "description": "caldesk 微信小程序",
+  "appid": "wx926dcbdb74c38ab0",
+  "projectname": "caldesk",
+  "compileType": "miniprogram",
+  "libVersion": "3.10.0",
+  "setting": {
+    "urlCheck": false,
+    "es6": true,
+    "enhance": true,
+    "postcss": true,
+    "minified": true,
+    "coverView": true,
+    "nodeModules": false,
+    "autoAudits": false,
+    "uglifyFileName": false,
+    "checkInvalidKey": true,
+    "showShadowRootInWxmlPanel": true,
+    "packNpmManually": false,
+    "packNpmRelationList": [],
+    "babelSetting": {
+      "ignore": [],
+      "disablePlugins": [],
+      "outputPath": ""
+    }
+  },
+  "condition": {},
+  "editorSetting": {
+    "tabIndent": "insertSpaces",
+    "tabSize": 2
+  }
+}

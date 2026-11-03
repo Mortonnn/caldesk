@@ -1,0 +1,26 @@
+# 依赖
+node_modules/
+
+# 构建产物
+out/
+dist/
+release/
+android/
+ios/
+*.apk
+
+# 本地数据与凭证（绝不入库）
+*.db
+*.db-wal
+*.db-shm
+.preview/
+.dev.vars
+sync.json
+*.log
+.env
+.env.local
+.wrangler/
+
+# 系统
+.DS_Store
+Thumbs.db
