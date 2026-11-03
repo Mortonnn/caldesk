@@ -89,7 +89,19 @@ MCP（给 AI 用）：`node bin/cal-mcp.mjs`，工具定义在 `src/shared/tools
 | POST | `/pair/approve` / `/pair/reject` | 电脑批准 / 拒绝 |
 | GET | `/devices` | 列出本账号设备 |
 | POST | `/devices/revoke` | 撤销设备 |
+| GET | `/api/changes` | 账号内最新 `updated_at`，各端拿它做热更新轮询 |
 | GET/POST | `/api/calendars`、`/api/cells*`、`/api/events*`、`/api/notes*`、`/api/search` | 手机端用的 REST 接口 |
+
+### 热更新（不用退出重进）
+
+任何一端改完数据，其他端几秒内自动更新，靠的是 `/api/changes`：
+
+1. 每次写入都会刷新 `rows.updated_at`，所以账号的 `MAX(updated_at)` 就是"变更水位"。
+2. 客户端每 5 秒问一次这个水位，和上次看到的比：一样就什么都不做，变大了才去拉数据。
+3. 桌面端探到变化后调一次 `syncNow()`（推 + 拉），拉下来的行通过 IPC 广播 `data:changed`，界面立刻重读当月。
+4. 手机端是直接读 REST，探到变化就重跑一次 `loadRange()`；另外监听 `visibilitychange`，从后台切回来也刷一次。
+
+比"每次全量轮询"省得多，又不用维持长连接（免费额度友好）。
 
 数据模型刻意做得很薄：所有集合都存在 `rows(tbl, account_id, id, updated_at, deleted_at, payload)` 一张表里，
 加集合不用改表；冲突用 `updated_at` 大的胜出，删除用 `deleted_at` 墓碑。

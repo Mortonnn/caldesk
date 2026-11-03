@@ -1069,10 +1069,8 @@ export default function App(): React.JSX.Element {
                             {countdownText(item.occ.event.targetDate, item.occ.date)}
                           </span>
                         )}
-                        {item.occ.event.rrule ? (
+                        {item.occ.event.rrule && (
                           <span className="ev-meta">{describeRrule(item.occ.event.rrule)}</span>
-                        ) : (
-                          <span className="ev-meta">当天</span>
                         )}
                         <button
                           className="task-del"
@@ -1095,7 +1093,6 @@ export default function App(): React.JSX.Element {
                           onClick={() => void toggleLine(selected, item.index, !item.done)}
                         />
                         <span className="task-text">{lineText(item.text)}</span>
-                        <span className="ev-meta">当天</span>
                         <button
                           className="task-del"
                           aria-label="删除这条任务"
@@ -1196,15 +1193,7 @@ export default function App(): React.JSX.Element {
                   )}
                 </AnimatePresence>
 
-                {cellError || eventError ? (
-                  <p className="cal-error">{cellError ?? eventError}</p>
-                ) : (
-                  <span className="hint">
-                    {eventOpen
-                      ? '事件会显示在日历上，可设重复'
-                      : '任务只属于这一天；展开事件选项可设重复'}
-                  </span>
-                )}
+                {(cellError || eventError) && <p className="cal-error">{cellError ?? eventError}</p>}
               </footer>
             </motion.aside>
           )}

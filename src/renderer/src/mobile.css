@@ -30,11 +30,17 @@
   /* 液态玻璃 */
   --m-glass-bg: linear-gradient(
     180deg,
-    rgba(255, 255, 255, 0.62) 0%,
-    rgba(255, 255, 255, 0.42) 100%
+    rgba(255, 255, 255, 0.72) 0%,
+    rgba(255, 255, 255, 0.5) 100%
   );
-  --m-glass-edge: rgba(255, 255, 255, 0.7);
-  --m-glass-pill: rgba(255, 255, 255, 0.72);
+  --m-glass-edge: rgba(255, 255, 255, 0.95);
+  --m-glass-line: rgba(125, 138, 165, 0.24);
+  --m-glass-pill: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.98) 0%,
+    rgba(245, 248, 255, 0.9) 100%
+  );
+  --m-glass-pill-shadow: 0 2px 8px rgba(15, 20, 35, 0.1), 0 1px 2px rgba(15, 20, 35, 0.06);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -53,11 +59,17 @@
     /* 深色下玻璃要更透、更有蓝调，不然会糊成一块灰 */
     --m-glass-bg: linear-gradient(
       180deg,
-      rgba(58, 66, 84, 0.55) 0%,
-      rgba(30, 34, 44, 0.42) 100%
+      rgba(72, 82, 104, 0.5) 0%,
+      rgba(34, 39, 51, 0.44) 100%
     );
-    --m-glass-edge: rgba(255, 255, 255, 0.16);
-    --m-glass-pill: rgba(255, 255, 255, 0.14);
+    --m-glass-edge: rgba(255, 255, 255, 0.2);
+    --m-glass-line: rgba(255, 255, 255, 0.14);
+    --m-glass-pill: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.2) 0%,
+      rgba(255, 255, 255, 0.08) 100%
+    );
+    --m-glass-pill-shadow: 0 2px 8px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.22);
   }
 }
 
@@ -209,7 +221,6 @@ textarea {
   align-items: center;
   gap: 10px;
   pointer-events: auto;
-  transform-origin: center bottom;
 }
 
 /* 玻璃面板本体 */
@@ -225,17 +236,28 @@ textarea {
   isolation: isolate;
 
   /* 玻璃：真的把背后的东西揉成一片 */
-  -webkit-backdrop-filter: blur(22px) saturate(180%);
-  backdrop-filter: blur(22px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(190%);
+  backdrop-filter: blur(24px) saturate(190%);
 
   /* 厚度感：半透明渐变 */
   background: var(--m-glass-bg);
 
+  /* 边缘：浅色背景下靠这道细描边把玻璃"托"出来 */
+  border: 1px solid var(--m-glass-line);
+
   /* 边缘折射 */
   box-shadow:
     inset 0 1px 0 var(--m-glass-edge),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.06),
-    0 10px 30px rgba(0, 0, 0, 0.16);
+    inset 0 -1px 0 rgba(0, 0, 0, 0.05),
+    0 12px 32px rgba(15, 20, 35, 0.16),
+    0 3px 8px rgba(15, 20, 35, 0.08);
+
+  /* 按压时轻微下沉：transform 放在玻璃自己身上，不会切断 backdrop-filter */
+  transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.m-dock-glass:active {
+  transform: scale(0.975);
 }
 
 /* 顶部一道高光，玻璃的"厚度"来源 */
@@ -262,9 +284,21 @@ textarea {
   z-index: 0;
   border-radius: 20px;
   background: var(--m-glass-pill);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.4),
-    0 3px 12px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--m-glass-pill-shadow);
+  pointer-events: none;
+}
+
+/* 药丸上沿的一道反光：玻璃被手指按住时的那圈亮边 */
+.m-dock-pill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.55) 0%,
+    rgba(255, 255, 255, 0) 55%
+  );
   pointer-events: none;
 }
 
@@ -548,6 +582,33 @@ textarea {
 .m-task-text.m-task-done {
   color: var(--m-text-3);
   text-decoration: line-through;
+}
+
+/* 读数据失败的提示：不要静默留一个空日历，让人知道是网络问题 */
+.m-load-error {
+  display: block;
+  width: calc(100% - 20px);
+  margin: 10px auto 0;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: rgba(229, 72, 77, 0.12);
+  color: var(--m-danger);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: center;
+}
+
+/* 右侧小标签：区分"当天"和重复规则 */
+.m-task-tag {
+  flex: none;
+  align-self: center;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--m-text-3);
+  background: var(--m-surface-2);
+  padding: 2px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
 }
 
 .m-task-del {

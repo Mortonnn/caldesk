@@ -58,7 +58,6 @@ export function GlassDock({
   const stride = items.length > 0 && width > 0 ? width / items.length : 0
 
   const x = useSpring(0, { stiffness: 420, damping: 34, mass: 0.7 })
-  const scale = useSpring(1, { stiffness: 400, damping: 30 })
 
   /* 量宽度：首帧 + 尺寸变化 */
   useLayoutEffect(() => {
@@ -88,7 +87,6 @@ export function GlassDock({
 
   function onPointerDown(e: React.PointerEvent<HTMLDivElement>): void {
     pressedRef.current = true
-    scale.set(0.965)
     setHover(indexAt(e.clientX))
   }
 
@@ -100,7 +98,6 @@ export function GlassDock({
   function onPointerEnd(e: React.PointerEvent<HTMLDivElement>): void {
     if (!pressedRef.current) return
     pressedRef.current = false
-    scale.set(1)
     const i = indexAt(e.clientX)
     setHover(null)
     const item = items[i]
@@ -109,7 +106,7 @@ export function GlassDock({
 
   return (
     <div className="m-dock-wrap">
-      <motion.div className="m-dock" style={{ scale }}>
+      <div className="m-dock">
         <div
           className="m-dock-glass"
           ref={dockRef}
@@ -150,7 +147,7 @@ export function GlassDock({
             {plusIcon}
           </motion.button>
         </div>
-      </motion.div>
+      </div>
     </div>
   )
 }

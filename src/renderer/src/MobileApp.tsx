@@ -6,11 +6,11 @@
  *  - 中部：月历网格 → 点某天看当天详情
  *  - 底部：视图切换 + 悬浮加号
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import type { CalendarEvent, CalendarMeta, DayCell, EventOccurrence } from '@shared/types'
 import { isDoneLine, lineText, splitLines } from '@shared/types'
-import { fromDayNumber, toDayNumber, weekdayOf } from '@shared/rrule'
+import { describeRrule, fromDayNumber, toDayNumber, weekdayOf } from '@shared/rrule'
 import { DEFAULT_SERVER_URL } from './mobileIdentity'
 import { data } from './data'
 import type { DeviceListResult } from './data'
@@ -91,10 +91,17 @@ function eventTime(ev: CalendarEvent): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
+/**
+ * 列表右侧那个小标签。
+ *
+ * 任务和事件是同一件事，区别只有"只属于这一天"和"会重复"。
+ * 默认不重复就不加标签（不然每行都是"当天"，纯噪音），
+ * 只有真的会重复/是提醒/倒数日时才说明一句。
+ */
 function eventKindLabel(ev: CalendarEvent): string {
-  if (ev.kind === 'reminder') return '提醒'
   if (ev.kind === 'countdown') return '倒数日'
-  return ev.rrule ? '重复任务' : '任务'
+  if (ev.rrule) return describeRrule(ev.rrule)
+  return ev.kind === 'reminder' ? '提醒' : ''
 }
 
 /* ------------------------------ 主体 ------------------------------ */
@@ -115,6 +122,15 @@ export default function MobileApp(): React.JSX.Element {
   const [draft, setDraft] = useState('')
   const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL)
   const [devices, setDevices] = useState<DeviceListResult['devices']>([])
+  const [loadError, setLoadError] = useState<string | null>(null)
+  /**
+   * 上次看到的服务端水位。
+   *
+   * 放 ref + localStorage 而不是 effect 里的局部变量：
+   * effect 每次重跑都会把基线清零，导致"第一次只记录基准"的分支反复走，
+   * 永远检测不到变更 —— 这正是"电脑改完手机必须退出重进"的根本原因。
+   */
+  const tokenRef = useRef(0)
 
   const say = useCallback((msg: string) => {
     setToast(msg)
@@ -130,16 +146,17 @@ export default function MobileApp(): React.JSX.Element {
         setReady(true)
         return
       }
+      setServerUrl(st.serverUrl || DEFAULT_SERVER_URL)
       const list = await data.calendars.list()
       if (list.ok) {
         setCalendars(list.data)
         setCalId(list.data[0]?.id ?? '')
       }
-      setServerUrl(st.serverUrl || DEFAULT_SERVER_URL)
-      // 设备列表：任何设备都能看到当前账号下配对的所有设备
-      const devs = await data.sync.devices()
-      if (devs.ok) setDevices(devs.data.devices)
+      // 先把界面放出来再拉设备列表：设备列表慢一点不该让整个应用白屏
       setReady(true)
+      void data.sync.devices().then((devs) => {
+        if (devs.ok) setDevices(devs.data.devices)
+      })
     })()
   }, [])
 
@@ -148,16 +165,27 @@ export default function MobileApp(): React.JSX.Element {
     if (!cal) return
     const from = addDays(center, -40)
     const to = addDays(center, 70)
-    const [c, e] = await Promise.all([
-      data.cells.range(cal, from, to),
-      data.events.range(cal, from, to)
-    ])
-    if (c.ok) {
-      const map: Record<string, DayCell> = {}
-      for (const cell of c.data) map[cell.date] = cell
-      setCells(map)
+    let lastErr = ''
+    // 冷启动时第一条请求可能抢在网络上电前发出，失败重试一次再放弃
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const [c, e] = await Promise.all([
+        data.cells.range(cal, from, to),
+        data.events.range(cal, from, to)
+      ])
+      if (c.ok) {
+        const map: Record<string, DayCell> = {}
+        for (const cell of c.data) map[cell.date] = cell
+        setCells(map)
+        setLoadError(null)
+      } else {
+        lastErr = c.error
+      }
+      if (e.ok) setEvents(e.data)
+      if (c.ok || e.ok) return
+      if (attempt === 0) await new Promise((r) => setTimeout(r, 800))
     }
-    if (e.ok) setEvents(e.data)
+    // 两次都失败：明确告诉用户，别留一个看起来"没有任务"的空壳
+    setLoadError(lastErr || '读不到数据')
   }, [])
 
   useEffect(() => {
@@ -173,6 +201,14 @@ export default function MobileApp(): React.JSX.Element {
     return () => window.removeEventListener('focus', onFocus)
   }, [paired, calId, date, loadRange])
 
+  /* 打开设置页时重新拉一次设备列表，保证看到的是最新的已配对设备 */
+  useEffect(() => {
+    if (tab !== 'settings' || !paired) return
+    void data.sync.devices().then((devs) => {
+      if (devs.ok) setDevices(devs.data.devices)
+    })
+  }, [tab, paired])
+
   /**
    * 热更新：每隔几秒探一次服务端的水位。
    *
@@ -183,19 +219,19 @@ export default function MobileApp(): React.JSX.Element {
     if (!ready || !paired || !calId) return
     let stopped = false
     let timer: ReturnType<typeof setTimeout> | null = null
-    let known = 0
 
     const tick = async (): Promise<void> => {
       if (stopped) return
       try {
         const probe = await data.sync.changes()
-        if (!stopped && probe.remote > 0) {
-          if (known === 0) {
-            // 第一次探针只记录基准，不触发刷新
-            known = probe.remote
-          } else if (probe.remote > known) {
-            known = probe.remote
-            if (!stopped) await loadRange(calId, date)
+        if (stopped) return
+        if (probe.remote > 0) {
+          if (tokenRef.current === 0) {
+            // 第一次只记基准，不触发刷新（避免刚打开就多拉一次）
+            tokenRef.current = probe.remote
+          } else if (probe.remote > tokenRef.current) {
+            tokenRef.current = probe.remote
+            await loadRange(calId, date)
           }
         }
       } catch {
@@ -211,11 +247,36 @@ export default function MobileApp(): React.JSX.Element {
     }
   }, [ready, paired, calId, date, loadRange])
 
+  /** 从后台切回来（Android WebView 走 visibilitychange，不一定会发 focus） */
+  useEffect(() => {
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible' && paired && calId) {
+        void loadRange(calId, date)
+      }
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [paired, calId, date, loadRange])
+
   /* ------------------------------ 当天内容 ------------------------------ */
 
   const cell = cells[date]
   const lines = useMemo(() => splitLines(cell?.text ?? ''), [cell?.text])
   const dayEvents = useMemo(() => events.filter((o) => o.date === date), [events, date])
+
+  /**
+   * 当天要显示的东西：任务和事件合成一个列表。
+   *
+   * 事件（可重复的）排前面，当天普通任务排后面，
+   * 每行右边用一个小标签区分"当天"还是重复规则。
+   */
+  const dayItems = useMemo(() => {
+    const evs = dayEvents.map((occ) => ({ type: 'event' as const, occ }))
+    const lns = lines
+      .map((text, index) => ({ type: 'line' as const, text, index, done: isDoneLine(text) }))
+      .filter((l) => l.text.trim().length > 0)
+    return [...evs, ...lns]
+  }, [dayEvents, lines])
 
   /** 当前月份的网格（6 行 × 7 列，周一起） */
   const monthGrid = useMemo(() => {
@@ -294,6 +355,16 @@ export default function MobileApp(): React.JSX.Element {
     }
   }
 
+  async function removeEvent(o: EventOccurrence): Promise<void> {
+    const res = await data.events.remove(o.event.id)
+    if (res.ok) {
+      setEvents(events.filter((x) => !(x.event.id === o.event.id && x.date === o.date)))
+      say('已删除')
+    } else {
+      say('删除失败')
+    }
+  }
+
   async function refreshAll(): Promise<void> {
     const list = await data.calendars.list()
     if (list.ok) {
@@ -358,6 +429,11 @@ export default function MobileApp(): React.JSX.Element {
 
       {/* 内容 */}
       <div className="m-body">
+        {loadError && (
+          <button className="m-load-error" onClick={() => void loadRange(calId, date)}>
+            {loadError} · 点这里重试
+          </button>
+        )}
         {tab === 'month' && (
           <>
             {/* 月历网格 */}
@@ -404,71 +480,68 @@ export default function MobileApp(): React.JSX.Element {
                 )}
               </div>
 
+              {/* 任务是"只属于这一天"，事件是"可以重复的任务"，本质是同一件事，
+                  所以合成一个列表，只用一个标签区分。 */}
               <div className="m-section">
                 <div className="m-section-head">
-                  <span>任务</span>
+                  <span>这一天</span>
                   <button onClick={() => setAdding(true)}>添加</button>
                 </div>
-                {lines.length === 0 ? (
-                  <div className="m-empty">这一天还没有任务</div>
+                {dayItems.length === 0 ? (
+                  <div className="m-empty">这一天还没有安排</div>
                 ) : (
-                  lines.map((line, i) => {
-                    const done = isDoneLine(line)
-                    return (
-                      <div className="m-task" key={`${i}-${line}`}>
+                  dayItems.map((it) =>
+                    it.type === 'event' ? (
+                      <div className="m-task" key={`e-${it.occ.event.id}-${it.occ.date}`}>
                         <button
-                          className={`m-task-check ${done ? 'm-task-check-on' : ''}`}
-                          onClick={() => void toggleTask(i)}
-                          aria-label={done ? '取消完成' : '完成'}
+                          className={`m-task-check ${it.occ.done ? 'm-task-check-on' : ''}`}
+                          onClick={() => void toggleEvent(it.occ)}
+                          aria-label={it.occ.done ? '取消完成' : '完成'}
                         >
-                          {done && Icon.check}
+                          {it.occ.done && Icon.check}
                         </button>
-                        <span className={`m-task-text ${done ? 'm-task-done' : ''}`}>
-                          {lineText(line)}
+                        <span
+                          className={`m-task-text ${it.occ.done ? 'm-task-done' : ''}`}
+                        >
+                          {it.occ.event.title}
+                        </span>
+                        {eventKindLabel(it.occ.event) && (
+                          <span className="m-task-tag">
+                            {eventKindLabel(it.occ.event)}
+                          </span>
+                        )}
+                        <button
+                          className="m-task-del"
+                          onClick={() => void removeEvent(it.occ)}
+                          aria-label="删除"
+                        >
+                          {Icon.trash}
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="m-task" key={`l-${it.index}-${it.text}`}>
+                        <button
+                          className={`m-task-check ${it.done ? 'm-task-check-on' : ''}`}
+                          onClick={() => void toggleTask(it.index)}
+                          aria-label={it.done ? '取消完成' : '完成'}
+                        >
+                          {it.done && Icon.check}
+                        </button>
+                        <span className={`m-task-text ${it.done ? 'm-task-done' : ''}`}>
+                          {lineText(it.text)}
                         </span>
                         <button
                           className="m-task-del"
-                          onClick={() => void removeTask(i)}
+                          onClick={() => void removeTask(it.index)}
                           aria-label="删除"
                         >
                           {Icon.trash}
                         </button>
                       </div>
                     )
-                  })
+                  )
                 )}
               </div>
-
-              {dayEvents.length > 0 && (
-                <div className="m-section">
-                  <div className="m-section-head">
-                    <span>事件 / 提醒</span>
-                  </div>
-                  {dayEvents.map((o) => (
-                    <div className="m-event" key={`${o.event.id}-${o.date}`}>
-                      <button
-                        className={`m-task-check ${o.done ? 'm-task-check-on' : ''}`}
-                        onClick={() => void toggleEvent(o)}
-                        aria-label={o.done ? '取消完成' : '完成'}
-                      >
-                        {o.done && Icon.check}
-                      </button>
-                      <div className="m-event-main">
-                        <div className={`m-event-title ${o.done ? 'm-task-done' : ''}`}>
-                          {o.event.title}
-                        </div>
-                        <div className="m-event-meta">
-                          {eventTime(o.event)} · {eventKindLabel(o.event)}
-                        </div>
-                      </div>
-                      <div
-                        className="m-event-bar"
-                        style={{ background: o.event.color ?? 'var(--m-accent)' }}
-                      />
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
           </>
         )}

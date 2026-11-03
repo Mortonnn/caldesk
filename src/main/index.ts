@@ -658,8 +658,11 @@ handle('search:query', (query: string, calendarId?: string, limit?: number) =>
  * 远端水位和服务端比：本地记住上次看到的水位（sync:remoteToken），
  * 服务端的数字变大了就说明有东西要拉。
  * 不用拿本地水位比 —— 本地可能有还没推上去的行，比了会永远不一样。
+ *
+ * 这里直接用 ipcMain.handle（而不是 handle 包装）：这是个异步只读探针，
+ * 既不能被当成写操作去广播 data:changed，也不能让 Promise 逃到返回值里。
  */
-handle('sync:changes', async () => {
+ipcMain.handle('sync:changes', async () => {
   const id = identityOf()
   if (!isPaired(id)) return { local: localChangeToken(), remote: 0, changed: false }
   try {
@@ -681,7 +684,14 @@ function identityOf(): StoredIdentity {
   return ensureIdentity(app.getPath('userData'))
 }
 
-handle('sync:get-state', () => {
+/**
+ * 读同步状态。
+ *
+ * 注意用 ipcMain.handle 而不是 handle()：handle() 会把返回值包成 { ok, data }，
+ * 而 preload 和渲染层都按裸对象消费（s.paired / s.serverUrl），
+ * 包一层会让 paired 永远是 undefined —— 已配对也显示成"创建账号"。
+ */
+ipcMain.handle('sync:get-state', () => {
   const id = identityOf()
   return {
     serverUrl: id.serverUrl,
@@ -692,7 +702,8 @@ handle('sync:get-state', () => {
   }
 })
 
-handle('sync:set-server', (url: string, deviceName: string) => {
+/* 同上：saveSyncServer 直接读 res.serverUrl，不能包信封 */
+ipcMain.handle('sync:set-server', (_e, url: string, deviceName: string) => {
   const id = ensureIdentity(app.getPath('userData'), {
     // 地址留空 = 用默认服务器
     serverUrl: url.trim().replace(/\/$/, ''),
