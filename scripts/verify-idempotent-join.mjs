@@ -4,7 +4,7 @@
  */
 import { readFileSync } from 'node:fs'
 
-const BASE = 'https://caldesk.ilikeu.cc.cd'
+const BASE = 'https://your-worker.example.com'
 const deviceId = process.argv[2]
 const deviceSecret = process.argv[3]
 

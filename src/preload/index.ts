@@ -31,7 +31,10 @@ const api = {
     get: () => ipcRenderer.invoke('settings:get') as Promise<{
       miniVisible: boolean
       miniPinned: boolean
-    }>
+      autoStart: boolean
+    }>,
+    setAutoStart: (on: boolean) =>
+      ipcRenderer.invoke('settings:set-auto-start', on) as Promise<boolean>
   },
   calendars: {
     list: () => ipcRenderer.invoke('calendars:list') as Promise<IpcResult<CalendarMeta[]>>,

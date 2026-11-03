@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { format } from 'date-fns'
 import { zhCN } from 'date-fns/locale'
 import { isDoneLine, lineText, splitLines } from '@shared/types'
+import { CalMark, Icon } from './icons'
 import { data } from './data'
 import './mini.css'
 
@@ -145,7 +146,12 @@ function Mini(): React.JSX.Element {
     <div className="mini">
       <header className="mini-head" onDoubleClick={() => void data.app.openMain()}>
         <div className="mini-title">
-          <strong>{format(now, 'M月d日', { locale: zhCN })}</strong>
+          <strong>
+            <span className="mini-mark">
+              <CalMark size={14} />
+            </span>
+            {format(now, 'M月d日', { locale: zhCN })}
+          </strong>
           <span>
             {format(now, 'EEEE', { locale: zhCN })}
             {pending > 0 ? ` · ${pending} 项待办` : ''}
@@ -161,10 +167,10 @@ function Mini(): React.JSX.Element {
               void data.mini.pin(next)
             }}
           >
-            <span className="mini-glyph">{pinned ? '\uE840' : '\uE718'}</span>
+            {Icon.pin}
           </button>
           <button className="mini-btn" title="隐藏" onClick={() => void data.mini.hide()}>
-            <span className="mini-glyph">{'\uE8BB'}</span>
+            {Icon.x}
           </button>
         </div>
       </header>

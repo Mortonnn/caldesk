@@ -10,7 +10,7 @@ if (!deviceId || !deviceSecret) {
   process.exit(1)
 }
 
-const BASE = 'https://caldesk.ilikeu.cc.cd'
+const BASE = 'https://your-worker.example.com'
 const headers = { authorization: `Bearer ${deviceId}.${deviceSecret}` }
 
 async function get(path) {

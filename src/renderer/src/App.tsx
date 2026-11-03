@@ -1,6 +1,25 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
+  CalMark,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Menu,
+  Note as NoteIcon,
+  PanelLeft,
+  Plus,
+  Search,
+  Settings,
+  Trash,
+  WinClose,
+  WinMaximize,
+  WinMinimize,
+  WinRestore,
+  X
+} from './icons'
+import { DROPLET, DUR, EASE_OUT, PANEL, fade, panelIn } from './motion'
+import {
   addMonths,
   eachDayOfInterval,
   endOfMonth,
@@ -60,16 +79,7 @@ function stampOf(ts: number): string {
   return sameDay ? `今天 ${format(d, 'HH:mm')}` : format(d, 'M月d日 HH:mm')
 }
 
-/** Windows 11 标题栏字体的码位，与系统原生按钮一致 */
-const CAP = {
-  minimize: '\uE921',
-  maximize: '\uE922',
-  restore: '\uE923',
-  close: '\uE8BB',
-  settings: '\uE713',
-  search: '\uE721',
-  notes: '\uE8A5'
-}
+/** Windows 11 标题栏按钮的绘制尺寸，与系统原生按钮一致 */
 
 /**
  * 把 'yyyy-MM-dd' 解析为**本地**零点的 Date。
@@ -110,6 +120,8 @@ export default function App(): React.JSX.Element {
   const [theme, setTheme] = useState<ThemeMode>('system')
   const [maximized, setMaximized] = useState(false)
   const [miniVisible, setMiniVisible] = useState(false)
+  /** 开机自启动：默认开，登录后安静进托盘 */
+  const [autoStart, setAutoStart] = useState(true)
   const [cells, setCells] = useState<Record<string, string>>({})
   const [draftTask, setDraftTask] = useState('')
   const [cellError, setCellError] = useState<string | null>(null)
@@ -197,7 +209,10 @@ export default function App(): React.JSX.Element {
   }
 
   useEffect(() => {
-    void data.settings.get().then((s) => setMiniVisible(s.miniVisible))
+    void data.settings.get().then((s) => {
+      setMiniVisible(s.miniVisible)
+      setAutoStart(s.autoStart)
+    })
     void getThemeMode().then(setTheme)
     void data.sync.getState().then((s) => {
       setSyncUrl(s.serverUrl)
@@ -766,35 +781,18 @@ export default function App(): React.JSX.Element {
             aria-label={sidebarCollapsed ? '展开侧栏' : '折叠侧栏'}
             title={sidebarCollapsed ? '展开侧栏' : '折叠侧栏'}
           >
-            <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-              <rect
-                x="1.75"
-                y="2.75"
-                width="12.5"
-                height="10.5"
-                rx="2"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.3"
-              />
-              <line x1="6.25" y1="2.9" x2="6.25" y2="13.1" stroke="currentColor" strokeWidth="1.3" />
-            </svg>
+            <PanelLeft />
           </button>
           <button
             className="menu-btn"
             onClick={() => setDrawerOpen((v) => !v)}
             aria-label="切换侧栏"
           >
-            <svg width="15" height="15" viewBox="0 0 15 15" aria-hidden="true">
-              <path
-                d="M2 4h11M2 7.5h11M2 11h11"
-                stroke="currentColor"
-                strokeWidth="1.4"
-                strokeLinecap="round"
-              />
-            </svg>
+            <Menu />
           </button>
-          <span className="brand-dot" style={{ background: current?.color ?? 'var(--accent)' }} />
+          <span className="brand-mark">
+            <CalMark size={18} />
+          </span>
           <span className="brand">caldesk</span>
         </div>
 
@@ -805,7 +803,7 @@ export default function App(): React.JSX.Element {
             title="搜索"
             aria-label="搜索"
           >
-            <span className="cap-icon">{CAP.search}</span>
+            <Search />
           </button>
           <button
             className={`tool-btn ${panel === 'notes' ? 'active' : ''}`}
@@ -813,7 +811,7 @@ export default function App(): React.JSX.Element {
             title="便签"
             aria-label="便签"
           >
-            <span className="cap-icon">{CAP.notes}</span>
+            <NoteIcon />
           </button>
           <button
             className={`tool-btn ${panel === 'settings' ? 'active' : ''}`}
@@ -822,14 +820,17 @@ export default function App(): React.JSX.Element {
               setPanel(next)
               if (next === 'settings') {
                 // 每次打开都重新对齐真实状态：浮窗可能被它自己的关闭按钮隐藏过
-                void data.settings.get().then((s) => setMiniVisible(s.miniVisible))
+                void data.settings.get().then((s) => {
+                  setMiniVisible(s.miniVisible)
+                  setAutoStart(s.autoStart)
+                })
                 void loadSnaps()
               }
             }}
             aria-label="设置"
             title="设置"
           >
-            <span className="cap-icon">{CAP.settings}</span>
+            <Settings />
           </button>
         </div>
 
@@ -839,21 +840,21 @@ export default function App(): React.JSX.Element {
             onClick={() => void data.window.minimize()}
             aria-label="最小化"
           >
-            <span className="cap-icon">{CAP.minimize}</span>
+            <WinMinimize />
           </button>
           <button
             className="caption-btn"
             onClick={() => void data.window.toggleMaximize()}
             aria-label={maximized ? '向下还原' : '最大化'}
           >
-            <span className="cap-icon">{maximized ? CAP.restore : CAP.maximize}</span>
+            {maximized ? <WinRestore /> : <WinMaximize />}
           </button>
           <button
             className="caption-btn close"
             onClick={() => void data.window.close()}
             aria-label="关闭"
           >
-            <span className="cap-icon">{CAP.close}</span>
+            <WinClose />
           </button>
         </div>
       </header>
@@ -862,14 +863,20 @@ export default function App(): React.JSX.Element {
         <aside className={`sidebar ${drawerOpen ? 'open' : ''}`}>
           <div className="month-nav">
             <button onClick={() => setCursor((c) => subMonths(c, 1))} aria-label="上个月">
-              &#x2039;
+              <ChevronLeft />
             </button>
-            <div className="month-label">
+            <motion.div
+              className="month-label"
+              key={format(cursor, 'yyyy-MM')}
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: DUR.base, ease: EASE_OUT }}
+            >
               <strong>{format(cursor, 'yyyy年 M月', { locale: zhCN })}</strong>
               <span>{format(cursor, 'MMMM', { locale: zhCN })}</span>
-            </div>
+            </motion.div>
             <button onClick={() => setCursor((c) => addMonths(c, 1))} aria-label="下个月">
-              &#x203A;
+              <ChevronRight />
             </button>
           </div>
 
@@ -887,12 +894,12 @@ export default function App(): React.JSX.Element {
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') setActiveCal(cal.id)
                 }}
-                whileTap={{ scale: 0.99 }}
+                transition={DROPLET}
                 layout
               >
                 <span className="cal-dot" style={{ background: cal.color }} />
                 <span className="cal-name">{cal.name}</span>
-                {cal.id === activeCal && <span className="cal-pill">当前</span>}
+                {cal.id === activeCal && <span className="cal-current">当前</span>}
                 {calendars.length > 1 && (
                   <button
                     className="cal-del"
@@ -903,7 +910,7 @@ export default function App(): React.JSX.Element {
                       void removeCalendar(cal.id)
                     }}
                   >
-                    &#x2715;
+                    <X />
                   </button>
                 )}
               </motion.div>
@@ -930,7 +937,8 @@ export default function App(): React.JSX.Element {
               />
             ) : (
               <button className="cal-new" onClick={() => setAdding(true)}>
-                <span>＋</span> 新建视图
+                <Plus />
+                新建视图
               </button>
             )}
 
@@ -970,13 +978,11 @@ export default function App(): React.JSX.Element {
               const outside = !isSameMonth(day, cursor)
               const fit = layoutCell(dayEvents.length, lines.length, cellRows)
               return (
-                <motion.button
+                <button
                   key={key}
                   className={`cell ${outside ? 'outside' : ''} ${key === selected ? 'selected' : ''}`}
                   onClick={() => setSelected(key)}
-                  whileHover={{ y: -1 }}
-                  whileTap={{ scale: 0.995 }}
-                  transition={{ type: 'spring', stiffness: 520, damping: 32 }}
+                  aria-pressed={key === selected}
                 >
                   <span className={`daynum ${isToday(day) ? 'today' : ''}`}>{format(day, 'd')}</span>
                   <div
@@ -1015,7 +1021,7 @@ export default function App(): React.JSX.Element {
                     )}
                     {fit.hidden > 0 && <span className="cell-more">+{fit.hidden}</span>}
                   </div>
-                </motion.button>
+                </button>
               )
             })}
           </div>
@@ -1023,13 +1029,27 @@ export default function App(): React.JSX.Element {
 
         <AnimatePresence>
           {selected && (
+            <motion.div
+              key="detail-scrim"
+              className="detail-scrim"
+              variants={fade}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              transition={{ duration: DUR.base, ease: EASE_OUT }}
+              onClick={() => setSelected(null)}
+            />
+          )}
+          {selected && (
             <motion.aside
+              key="detail"
               className="detail"
               style={{ width: `${detailWidth}px`, flex: `0 0 ${detailWidth}px` }}
-              initial={{ opacity: 0, x: 26 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: 26 }}
-              transition={{ type: 'spring', stiffness: 380, damping: 36 }}
+              variants={panelIn(18)}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              transition={PANEL}
             >
               {/* 左边缘可拖动改宽度 */}
               <div className="detail-resizer" onPointerDown={startResize} />
@@ -1053,6 +1073,7 @@ export default function App(): React.JSX.Element {
                       <motion.div
                         key={`ev-${item.occ.event.id}-${item.occ.date}`}
                         layout
+                        transition={DROPLET}
                         className={`task-row ${item.occ.done ? 'done' : ''}`}
                       >
                         {item.occ.event.kind === 'countdown' ? (
@@ -1062,7 +1083,9 @@ export default function App(): React.JSX.Element {
                             className={`checkbox ${item.occ.done ? 'checked' : ''}`}
                             aria-label={item.occ.done ? '标记为未完成' : '标记为完成'}
                             onClick={() => void toggleEventDone(item.occ)}
-                          />
+                          >
+                            {item.occ.done && <Check />}
+                          </button>
                         )}
                         <span className="task-text">{item.occ.event.title}</span>
                         {item.occ.event.kind === 'countdown' && (
@@ -1079,20 +1102,23 @@ export default function App(): React.JSX.Element {
                           title="删除事件"
                           onClick={() => void requestRemoveEvent(item.occ)}
                         >
-                          {'\u00D7'}
+                          <Trash />
                         </button>
                       </motion.div>
                     ) : (
                       <motion.div
                         key={`ln-${item.index}-${item.text}`}
                         layout
+                        transition={DROPLET}
                         className={`task-row ${item.done ? 'done' : ''}`}
                       >
                         <button
                           className={`checkbox ${item.done ? 'checked' : ''}`}
                           aria-label={item.done ? '标记为未完成' : '标记为完成'}
                           onClick={() => void toggleLine(selected, item.index, !item.done)}
-                        />
+                        >
+                          {item.done && <Check />}
+                        </button>
                         <span className="task-text">{lineText(item.text)}</span>
                         <button
                           className="task-del"
@@ -1100,7 +1126,7 @@ export default function App(): React.JSX.Element {
                           title="删除这条任务"
                           onClick={() => void removeLine(selected, item.index)}
                         >
-                          {'\u00D7'}
+                          <Trash />
                         </button>
                       </motion.div>
                     )
@@ -1125,7 +1151,9 @@ export default function App(): React.JSX.Element {
                   onClick={() => setEventOpen((v) => !v)}
                   aria-expanded={eventOpen}
                 >
-                  <span className="event-toggle-chev">{'\u203A'}</span>
+                  <span className="event-toggle-chev">
+                    <ChevronRight />
+                  </span>
                   {eventOpen ? '收起事件选项' : '展开事件选项'}
                 </button>
 
@@ -1203,8 +1231,13 @@ export default function App(): React.JSX.Element {
         <AnimatePresence>
           {panel !== 'none' && (
             <>
-              <div
+              <motion.div
                 className="panel-scrim"
+                variants={fade}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                transition={{ duration: DUR.base, ease: EASE_OUT }}
                 onClick={() => {
                   setPanel('none')
                   setEditing(null)
@@ -1212,11 +1245,12 @@ export default function App(): React.JSX.Element {
               />
               <motion.aside
                 className="panel"
-              initial={{ x: 30, opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
-              exit={{ x: 30, opacity: 0 }}
-              transition={{ type: 'spring', stiffness: 380, damping: 36 }}
-            >
+                variants={panelIn(20)}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                transition={PANEL}
+              >
               <header className="panel-head">
                 <h3>
                   {panel === 'notes' ? '便签' : panel === 'search' ? '搜索' : '设置'}
@@ -1256,6 +1290,34 @@ export default function App(): React.JSX.Element {
                           {THEME_LABEL[m]}
                         </button>
                       ))}
+                    </div>
+                  </section>
+
+                  <section className="set-block">
+                    <span className="pop-label">启动</span>
+                    <div className="pop-row">
+                      <div>
+                        <span className="pop-label-row">开机自启动</span>
+                        <p className="pop-desc">登录 Windows 后自动启动到托盘，不弹主窗口</p>
+                      </div>
+                      <button
+                        role="switch"
+                        aria-checked={autoStart}
+                        className={`switch ${autoStart ? 'on' : ''}`}
+                        onClick={() => {
+                          const next = !autoStart
+                          setAutoStart(next)
+                          void data.settings.setAutoStart(next)
+                        }}
+                      >
+                        <span className="switch-knob" />
+                      </button>
+                    </div>
+                    <div className="pop-row">
+                      <div>
+                        <span className="pop-label-row">关闭主窗口</span>
+                        <p className="pop-desc">收进托盘继续后台同步，从托盘菜单退出</p>
+                      </div>
                     </div>
                   </section>
 
@@ -1305,7 +1367,11 @@ export default function App(): React.JSX.Element {
                         <div className="sync-server">
                           <input
                             className="task-input"
-                            placeholder={`服务器地址（留空 = ${DEFAULT_SERVER_URL}）`}
+                            placeholder={
+                              DEFAULT_SERVER_URL
+                                ? `服务器地址（留空 = ${DEFAULT_SERVER_URL}）`
+                                : '服务器地址，例如 https://caldesk.workers.dev'
+                            }
                             value={syncUrl}
                             autoCapitalize="none"
                             autoCorrect="off"
@@ -1516,7 +1582,7 @@ export default function App(): React.JSX.Element {
                               void removeNote(n.id)
                             }}
                           >
-                            {'\u00D7'}
+                            <Trash />
                           </button>
                         </div>
                       ))
@@ -1531,31 +1597,48 @@ export default function App(): React.JSX.Element {
         </AnimatePresence>
       </div>
 
-      {confirmDelete && (
-        <div className="confirm-backdrop" onClick={() => setConfirmDelete(null)}>
-          <div className="confirm-card" onClick={(e) => e.stopPropagation()}>
-            <h3>删除重复任务</h3>
-            <p>「{confirmDelete.event.title}」是重复任务，要删除哪一部分？</p>
-            <div className="confirm-actions">
-              <button className="ghost" onClick={() => setConfirmDelete(null)}>
-                取消
-              </button>
-              <button className="ghost" onClick={() => void skipOne()}>
-                仅删除 {confirmDelete.date.slice(5)} 这天
-              </button>
-              <button
-                className="primary-btn"
-                onClick={() => {
-                  void removeEvent(confirmDelete.event.id)
-                  setConfirmDelete(null)
-                }}
-              >
-                删除整个重复
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <AnimatePresence>
+        {confirmDelete && (
+          <motion.div
+            className="confirm-backdrop"
+            variants={fade}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            transition={{ duration: DUR.base, ease: EASE_OUT }}
+            onClick={() => setConfirmDelete(null)}
+          >
+            <motion.div
+              className="confirm-card"
+              initial={{ opacity: 0, scale: 0.97, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.98, y: 4 }}
+              transition={PANEL}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3>删除重复任务</h3>
+              <p>「{confirmDelete.event.title}」是重复任务，要删除哪一部分？</p>
+              <div className="confirm-actions">
+                <button className="ghost" onClick={() => setConfirmDelete(null)}>
+                  取消
+                </button>
+                <button className="ghost" onClick={() => void skipOne()}>
+                  仅删除 {confirmDelete.date.slice(5)} 这天
+                </button>
+                <button
+                  className="primary-btn"
+                  onClick={() => {
+                    void removeEvent(confirmDelete.event.id)
+                    setConfirmDelete(null)
+                  }}
+                >
+                  删除整个重复
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

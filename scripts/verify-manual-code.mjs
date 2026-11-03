@@ -6,7 +6,7 @@
  *
  * 用法：node scripts/verify-manual-code.mjs [serverUrl] [code]
  */
-const BASE = (process.argv[2] || 'https://caldesk.ilikeu.cc.cd').replace(/\/$/, '')
+const BASE = (process.argv[2] || 'https://your-worker.example.com').replace(/\/$/, '')
 const CODE = process.argv[3] || ''
 
 let pass = 0

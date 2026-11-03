@@ -10,10 +10,10 @@
 /**
  * 默认的同步服务器地址。
  *
- * 发行版里这个地址就是作者自己部署的那套 Worker，所以用户**不用填地址**：
- * 桌面端和手机端都直接用它。留空 = 用这个。
+ * 仓库里不写死任何人的服务器：第一次用的时候在「设置 → 同步」里填自己的 Worker 地址，
+ * 或者手机扫码（地址在二维码里）。留空时界面会要求手工填写，而不是悄悄连到某个人的机器上。
  */
-export const DEFAULT_SERVER_URL = 'https://caldesk.ilikeu.cc.cd'
+export const DEFAULT_SERVER_URL = ''
 
 /** 地址为空时回落到默认服务器 */
 export function resolveServerUrl(url: string | undefined | null): string {

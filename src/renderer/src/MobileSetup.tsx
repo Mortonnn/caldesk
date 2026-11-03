@@ -7,6 +7,7 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { BarcodeScanner } from './BarcodeScanner'
+import { CalMark } from './icons'
 import { data } from './data'
 import { DEFAULT_SERVER_URL, parsePairText, resolveServerUrl } from './mobileIdentity'
 
@@ -65,6 +66,9 @@ export function MobileSetup({ onDone }: { onDone: () => void }): React.JSX.Eleme
   if (scanning) {
     return (
       <div className="m-setup">
+        <span className="m-setup-mark">
+          <CalMark size={32} />
+        </span>
         <h1>扫二维码</h1>
         <div className="m-scanner">
           <BarcodeScanner
@@ -93,7 +97,11 @@ export function MobileSetup({ onDone }: { onDone: () => void }): React.JSX.Eleme
 
   return (
     <div className="m-setup">
+      <span className="m-setup-mark">
+        <CalMark size={32} />
+      </span>
       <h1>连接你的日历</h1>
+      <p>在电脑端「设置 → 同步」里生成配对码，扫一下就连上了</p>
 
       <button className="m-setup-btn" onClick={() => setScanning(true)}>
         扫二维码
@@ -120,7 +128,7 @@ export function MobileSetup({ onDone }: { onDone: () => void }): React.JSX.Eleme
       <label className="m-setup-label">服务器</label>
       <input
         className="m-setup-input"
-        placeholder={DEFAULT_SERVER_URL}
+        placeholder={DEFAULT_SERVER_URL || 'https://你的-worker.workers.dev'}
         value={url}
         autoCapitalize="none"
         autoCorrect="off"

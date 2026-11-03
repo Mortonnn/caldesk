@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 
-const BASE_DEFAULT = 'https://caldesk.ilikeu.cc.cd'
+const BASE_DEFAULT = 'https://your-worker.example.com'
 const USER_DATA = join(homedir(), 'AppData', 'Roaming', 'caldesk')
 const identity = JSON.parse(readFileSync(join(USER_DATA, 'identity.json'), 'utf-8'))
 const base = (identity.serverUrl || BASE_DEFAULT).replace(/\/$/, '')

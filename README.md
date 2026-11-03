@@ -39,6 +39,11 @@ npx cap sync android
 cd android && gradlew assembleDebug
 ```
 
+> `android/` 由 `npx cap add android` 生成、不进版本库。重新生成后要补两件事：
+> 跑一次 `python scripts/make-icons.py`（应用图标与启动图），
+> 并在 `AndroidManifest.xml` 里补 `android.permission.VIBRATE`（底栏跨格的轻震动）。
+> 另外 `android/local.properties` 要写本机的 `sdk.dir`，否则 gradle 找不到 SDK。
+
 命令行：
 
 ```bash
@@ -108,8 +113,9 @@ MCP（给 AI 用）：`node bin/cal-mcp.mjs`，工具定义在 `src/shared/tools
 
 ### 客户端怎么连
 
-桌面端在「设置 → 同步」里填 Worker 地址（**留空即用作者的服务器** `https://caldesk.ilikeu.cc.cd`）。
+桌面端在「设置 → 同步」里填你自己部署的 Worker 地址（`docs/部署与安装.md` 有从零部署的步骤）。
 填好后本地一有改动 3 秒后自动推送，另外每 5 分钟对一次账。
+仓库与发布包里都不预置任何人的服务器地址，地址只存在你本机的身份文件里。
 
 ## 相关文档
 

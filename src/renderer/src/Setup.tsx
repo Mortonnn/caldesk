@@ -7,6 +7,8 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { BarcodeScanner } from './BarcodeScanner'
+import { CalMark } from './icons'
+import { DUR, EASE_OUT, riseIn } from './motion'
 import { data } from './data'
 import { DEFAULT_SERVER_URL, parsePairText, resolveServerUrl } from './mobileIdentity'
 
@@ -75,11 +77,15 @@ export default function Setup(): React.JSX.Element {
       <div className="setup">
         <motion.div
           className="setup-card"
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ type: 'spring', stiffness: 380, damping: 32 }}
+          variants={riseIn(10)}
+          initial="initial"
+          animate="animate"
+          transition={{ duration: DUR.page, ease: EASE_OUT }}
         >
-          <h1>扫二维码</h1>
+          <h1>
+            <CalMark size={20} />
+            扫二维码
+          </h1>
           <BarcodeScanner
             onCancel={() => setStep('welcome')}
             onError={(m) => setError(m)}
@@ -103,11 +109,15 @@ export default function Setup(): React.JSX.Element {
     <div className="setup">
       <motion.div
         className="setup-card"
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ type: 'spring', stiffness: 380, damping: 32 }}
+        variants={riseIn(10)}
+        initial="initial"
+        animate="animate"
+        transition={{ duration: DUR.page, ease: EASE_OUT }}
       >
-        <h1>连接你的日历</h1>
+        <h1>
+          <CalMark size={20} />
+          连接你的日历
+        </h1>
 
         <button className="primary-btn setup-btn" onClick={() => setStep('scan')}>
           扫二维码
@@ -134,7 +144,7 @@ export default function Setup(): React.JSX.Element {
         <label className="setup-label">服务器</label>
         <input
           className="task-input"
-          placeholder={DEFAULT_SERVER_URL}
+          placeholder={DEFAULT_SERVER_URL || 'https://你的-worker.workers.dev'}
           value={url}
           autoCapitalize="none"
           autoCorrect="off"

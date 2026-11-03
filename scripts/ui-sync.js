@@ -42,7 +42,7 @@ async function main() {
 
   // 第一个是服务器地址，第二个是设备名
   if (inputs.length >= 1) {
-    await setInput(inputs[0], 'https://caldesk.ilikeu.cc.cd')
+    await setInput(inputs[0], 'https://your-worker.example.com')
     log('filled server url')
   }
   if (inputs.length >= 2) {

@@ -9,7 +9,7 @@ import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 
-const BASE = (process.argv[2] || 'https://caldesk.ilikeu.cc.cd').replace(/\/$/, '')
+const BASE = (process.argv[2] || 'https://your-worker.example.com').replace(/\/$/, '')
 const USER_DATA = join(homedir(), 'AppData', 'Roaming', 'caldesk')
 
 const hex = (n) =>

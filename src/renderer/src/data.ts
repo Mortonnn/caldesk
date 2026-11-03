@@ -80,13 +80,19 @@ const HOST_KEY = 'caldesk.http'
 /* ------------------------------ HTTP 适配器 ------------------------------ */
 
 export function createHttpHost(cfg: HttpConfig): HostApi {
-  const base = cfg.url.replace(/\/$/, '')
-
   /* 移动端也走「设备凭据」：localStorage 里存 identity.json 的等价物 */
   const mobile: MobileIdentity = ensureMobileIdentity({
-    serverUrl: base,
+    // 空配置不能把已有的地址擦掉，undefined 才是「保持原样」
+    serverUrl: cfg.url || undefined,
     deviceName: cfg.deviceId ? '这台手机' : undefined
   })
+
+  /**
+   * 服务器地址以身份里的为准：默认地址可能为空，
+   * 配对成功后 pairJoin 会把二维码里的真实地址写进身份。
+   */
+  const base = (): string => (mobile.serverUrl || cfg.url || '').replace(/\/$/, '')
+
   if (cfg.deviceId && cfg.deviceSecret) {
     mobile.deviceId = cfg.deviceId
     mobile.deviceSecret = cfg.deviceSecret
@@ -118,7 +124,7 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
 
   async function req<T>(path: string, init?: RequestInit): Promise<IpcResult<T>> {
     try {
-      const res = await fetch(base + path, {
+      const res = await fetch(base() + path, {
         ...init,
         headers: {
           authorization: `Bearer ${mobile.deviceId}.${mobile.deviceSecret}`,
@@ -162,7 +168,10 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
       onMaximizedChange: () => () => {}
     },
 
-    settings: { get: () => Promise.resolve({ miniVisible: false, miniPinned: false }) },
+    settings: {
+      get: () => Promise.resolve({ miniVisible: false, miniPinned: false, autoStart: false }),
+      setAutoStart: () => Promise.resolve(false)
+    },
 
     calendars: {
       list: () => req<CalendarMeta[]>('/api/calendars'),
@@ -324,7 +333,7 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
       getState: async (): Promise<SyncStateResult> => {
         const id = loadMobileIdentity()
         return {
-          serverUrl: id?.serverUrl ?? base,
+          serverUrl: id?.serverUrl ?? base(),
           deviceId: id?.deviceId ?? '',
           deviceName: id?.deviceName ?? '这台手机',
           accountId: id?.accountId ?? '',
@@ -457,7 +466,10 @@ function createStub(): HostApi {
       isMaximized: () => Promise.resolve(false),
       onMaximizedChange: () => () => {}
     },
-    settings: { get: () => Promise.resolve({ miniVisible: false, miniPinned: true }) },
+    settings: {
+      get: () => Promise.resolve({ miniVisible: false, miniPinned: true, autoStart: false }),
+      setAutoStart: () => Promise.resolve(false)
+    },
     calendars: {
       list: () => rejected<CalendarMeta[]>('视图列表'),
       create: () => rejected<{ created: CalendarMeta; calendars: CalendarMeta[] }>('新建视图'),

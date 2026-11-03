@@ -1,10 +1,10 @@
 /**
- * 线上端到端验收：直接打 https://caldesk.ilikeu.cc.cd
+ * 线上端到端验收：直接打 https://your-worker.example.com
  *
  * 覆盖：建账号 → 扫码配对 → 批准 → 明文同步 → 账号隔离 → 吊销失效。
  * 用法：node scripts/verify-online.mjs [baseUrl]
  */
-const BASE = (process.argv[2] || 'https://caldesk.ilikeu.cc.cd').replace(/\/$/, '')
+const BASE = (process.argv[2] || 'https://your-worker.example.com').replace(/\/$/, '')
 
 let pass = 0
 let fail = 0

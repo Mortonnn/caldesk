@@ -13,11 +13,12 @@
 export const IDENTITY_KEY = 'caldesk.identity'
 
 /**
- * 默认的同步服务器地址（发行版 = 作者自己部署的那套 Worker）。
+ * 默认的同步服务器地址。
  *
- * 留空 = 用这个，所以手机端不用填地址。
+ * 不在仓库里写死任何人的服务器：扫码配对时地址来自二维码，
+ * 手输配对码时在配对页填自己的 Worker 地址。留空即要求手工填写。
  */
-export const DEFAULT_SERVER_URL = 'https://caldesk.ilikeu.cc.cd'
+export const DEFAULT_SERVER_URL = ''
 
 /** 地址为空时回落到默认服务器 */
 export function resolveServerUrl(url: string | undefined | null): string {

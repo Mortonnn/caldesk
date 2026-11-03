@@ -14,44 +14,11 @@ import { describeRrule, fromDayNumber, toDayNumber, weekdayOf } from '@shared/rr
 import { DEFAULT_SERVER_URL } from './mobileIdentity'
 import { data } from './data'
 import type { DeviceListResult } from './data'
+import { CalMark, Icon } from './icons'
+import { DUR, EASE_EMPHASIZED, EASE_OUT, fade, riseIn } from './motion'
 import { GlassDock } from './GlassDock'
 import { MobileSetup } from './MobileSetup'
 import './mobile.css'
-
-/* ------------------------------ 图标 ------------------------------ */
-
-const Icon = {
-  chevronLeft: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
-  ),
-  chevronRight: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
-  ),
-  chevronDown: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
-  ),
-  check: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
-  ),
-  plus: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
-  ),
-  trash: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /></svg>
-  ),
-  calendar: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="16" rx="3" /><path d="M8 3v4M16 3v4M3 11h18" /></svg>
-  ),
-  clock: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
-  ),
-  settings: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1A1.7 1.7 0 008 19.4a1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H2a2 2 0 110-4h.1A1.7 1.7 0 004.6 8a1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V2a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H22a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z" /></svg>
-  ),
-  close: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
-  )
-}
 
 /* ------------------------------ 工具 ------------------------------ */
 
@@ -108,6 +75,15 @@ function eventTime(ev: CalendarEvent): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
+/** 设备最后在线：今天只显示时分，跨天带日期，不再甩一整串本地化时间 */
+function seenAt(ts: number): string {
+  const d = new Date(ts)
+  const now = new Date()
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  if (d.toDateString() === now.toDateString()) return `今天 ${hm}`
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`
+}
+
 /**
  * 列表右侧那个小标签。
  *
@@ -144,6 +120,8 @@ export default function MobileApp(): React.JSX.Element {
   const [calMenu, setCalMenu] = useState(false)
   /** 月视图左右滑动手势 */
   const swipeRef = useRef<{ x: number; y: number; axis: 'x' | 'y' | null } | null>(null)
+  /** 翻月方向：新月份从手指来的那一侧进场（1 = 往后翻，-1 = 往前翻） */
+  const [dir, setDir] = useState(1)
   /**
    * 上次看到的服务端水位。
    *
@@ -330,8 +308,16 @@ export default function MobileApp(): React.JSX.Element {
 
   const upcoming = useMemo(() => {
     const today = todayISO()
+    // 服务端不保证顺序：先按日期排，同一天再按创建顺序，分组才是真实的时间线
+    const sorted = [...events]
+      .filter((x) => x.date >= today)
+      .sort((a, b) => {
+        if (a.date !== b.date) return a.date < b.date ? -1 : 1
+        return (a.event.createdAt ?? 0) - (b.event.createdAt ?? 0)
+      })
+      .slice(0, 60)
     const byDate = new Map<string, EventOccurrence[]>()
-    for (const o of events.filter((x) => x.date >= today).slice(0, 60)) {
+    for (const o of sorted) {
       const arr = byDate.get(o.date) ?? []
       arr.push(o)
       byDate.set(o.date, arr)
@@ -438,6 +424,7 @@ export default function MobileApp(): React.JSX.Element {
     if (s.axis === 'y') return
     if (Math.abs(dy) > Math.abs(dx)) return
     if (Math.abs(dx) > 56) {
+      setDir(dx < 0 ? 1 : -1)
       setDate((prev) => shiftMonth(prev, dx < 0 ? 1 : -1))
     }
   }
@@ -458,15 +445,28 @@ export default function MobileApp(): React.JSX.Element {
 
   const cal = calendars.find((c) => c.id === calId)
   const today = todayISO()
+  /** 顶栏标题跟着当前页走：月份 / 即将 / 设置，别让设置页顶着一个月份 */
+  const title = tab === 'month' ? monthLabel(date) : tab === 'upcoming' ? '即将' : '设置'
 
   return (
     <div className="m-shell">
-      {/* 顶栏：只留月份 + 日历切换。翻月靠左右滑，不再放 ‹ › 按钮 */}
+      {/* 顶栏：标题 + 日历切换。翻月靠左右滑，不占按钮 */}
       <header className="m-top">
         <div className="m-top-title">
-          <div className="m-top-month">{monthLabel(date)}</div>
+          <span className="m-brand">
+            <CalMark size={19} />
+          </span>
+          <motion.div
+            className="m-top-month"
+            key={title}
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: DUR.base, ease: EASE_OUT }}
+          >
+            {title}
+          </motion.div>
         </div>
-        {calendars.length > 0 && (
+        {calendars.length > 0 && tab !== 'settings' && (
           <button
             className={`m-cal-btn ${calMenu ? 'on' : ''}`}
             onClick={() => setCalMenu((v) => !v)}
@@ -482,240 +482,282 @@ export default function MobileApp(): React.JSX.Element {
         )}
       </header>
 
-      {/* 日历切换：仿 FlClash 的列表式弹出，选中项右侧打勾 */}
+      {/* 日历切换：列表式弹出，选中项右侧打勾 */}
       <AnimatePresence>
         {calMenu && (
-          <>
-            <div className="m-menu-mask" onClick={() => setCalMenu(false)} />
-            <motion.div
-              className="m-menu"
-              initial={{ opacity: 0, scale: 0.92, y: -10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.94, y: -8 }}
-              transition={{ type: 'spring', stiffness: 460, damping: 34 }}
-            >
-              {calendars.map((c) => (
-                <button
-                  key={c.id}
-                  className={`m-menu-item ${c.id === calId ? 'on' : ''}`}
-                  onClick={() => {
-                    setCalId(c.id)
-                    setCalMenu(false)
-                  }}
-                >
-                  <span className="m-menu-dot" style={{ background: c.color }} />
-                  <span className="m-menu-label">{c.name}</span>
-                  {c.id === calId && <span className="m-menu-check">{Icon.check}</span>}
-                </button>
-              ))}
-            </motion.div>
-          </>
+          <motion.div
+            key="cal-mask"
+            className="m-menu-mask"
+            variants={fade}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            transition={{ duration: DUR.base, ease: EASE_OUT }}
+            onClick={() => setCalMenu(false)}
+          />
+        )}
+        {calMenu && (
+          <motion.div
+            key="cal-menu"
+            className="m-menu"
+            initial={{ opacity: 0, scale: 0.96, y: -6 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.98, y: -4 }}
+            transition={{ duration: DUR.base, ease: EASE_EMPHASIZED }}
+          >
+            {calendars.map((c) => (
+              <button
+                key={c.id}
+                className={`m-menu-item ${c.id === calId ? 'on' : ''}`}
+                onClick={() => {
+                  setCalId(c.id)
+                  setCalMenu(false)
+                }}
+              >
+                <span className="m-menu-dot" style={{ background: c.color }} />
+                <span className="m-menu-label">{c.name}</span>
+                {c.id === calId && <span className="m-menu-check">{Icon.check}</span>}
+              </button>
+            ))}
+          </motion.div>
         )}
       </AnimatePresence>
 
-      {/* 内容 */}
+      {/* 内容：切页只做一次很短的淡入 + 上浮，不做整屏横移 */}
       <div className="m-body">
         {loadError && (
           <button className="m-load-error" onClick={() => void loadRange(calId, date)}>
             {loadError} · 点这里重试
           </button>
         )}
-        {tab === 'month' && (
-          <>
-            {/* 月历网格：左右滑切换月份 */}
-            <div
-              className="m-grid"
-              onTouchStart={onGridTouchStart}
-              onTouchMove={onGridTouchMove}
-              onTouchEnd={onGridTouchEnd}
-            >
-              {DOW.map((w) => (
-                <div className="m-grid-dow" key={w}>
-                  {w}
-                </div>
-              ))}
-              {monthGrid.map((d) => {
-                const inMonth = d.slice(0, 7) === date.slice(0, 7)
-                const c = dayCounts[d]
-                return (
-                  <button
-                    key={d}
-                    className={[
-                      'm-grid-cell',
-                      inMonth ? '' : 'm-grid-out',
-                      d === today ? 'm-grid-today' : '',
-                      d === date ? 'm-grid-selected' : ''
-                    ]
-                      .filter(Boolean)
-                      .join(' ')}
-                    onClick={() => setDate(d)}
-                  >
-                    <span className="m-grid-num">{Number(d.slice(8))}</span>
-                    <span className="m-grid-dots">
-                      {c?.tasks ? <i className="m-grid-dot m-grid-dot-task" /> : null}
-                      {c?.events ? <i className="m-grid-dot m-grid-dot-event" /> : null}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
 
-            {/* 当天详情：日期标题 + 合并后的任务/事件列表 */}
-            <div className="m-day">
-              <div className="m-day-head">
-                <span className="m-day-title">{dayLabel(date)}</span>
-                {date !== today && (
-                  <motion.button
-                    className="m-today-btn"
-                    whileTap={{ scale: 0.88 }}
-                    onClick={() => setDate(today)}
-                    aria-label="回到今天"
-                  >
-                    今
-                  </motion.button>
-                )}
-              </div>
-
-              {/* 任务是"只属于这一天"，事件是"可以重复的任务"，本质是同一件事，
-                  所以合成一个列表，只用一个标签区分。 */}
-              <div className="m-section">
-                <div className="m-section-head">
-                  <span>这一天</span>
-                </div>
-                {dayItems.length === 0 ? (
-                  <div className="m-empty">这一天还没有安排</div>
-                ) : (
-                  dayItems.map((it) =>
-                    it.type === 'event' ? (
-                      <div className="m-task" key={`e-${it.occ.event.id}-${it.occ.date}`}>
-                        <button
-                          className={`m-task-check ${it.occ.done ? 'm-task-check-on' : ''}`}
-                          onClick={() => void toggleEvent(it.occ)}
-                          aria-label={it.occ.done ? '取消完成' : '完成'}
-                        >
-                          {it.occ.done && Icon.check}
-                        </button>
-                        <span
-                          className={`m-task-text ${it.occ.done ? 'm-task-done' : ''}`}
-                        >
-                          {it.occ.event.title}
-                        </span>
-                        {eventKindLabel(it.occ.event) && (
-                          <span className="m-task-tag">
-                            {eventKindLabel(it.occ.event)}
-                          </span>
-                        )}
-                        <button
-                          className="m-task-del"
-                          onClick={() => void removeEvent(it.occ)}
-                          aria-label="删除"
-                        >
-                          {Icon.trash}
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="m-task" key={`l-${it.index}-${it.text}`}>
-                        <button
-                          className={`m-task-check ${it.done ? 'm-task-check-on' : ''}`}
-                          onClick={() => void toggleTask(it.index)}
-                          aria-label={it.done ? '取消完成' : '完成'}
-                        >
-                          {it.done && Icon.check}
-                        </button>
-                        <span className={`m-task-text ${it.done ? 'm-task-done' : ''}`}>
-                          {lineText(it.text)}
-                        </span>
-                        <button
-                          className="m-task-del"
-                          onClick={() => void removeTask(it.index)}
-                          aria-label="删除"
-                        >
-                          {Icon.trash}
-                        </button>
-                      </div>
-                    )
-                  )
-                )}
-              </div>
-            </div>
-          </>
-        )}
-
-        {tab === 'upcoming' && (
-          <div className="m-list">
-            {upcoming.length === 0 ? (
-              <div className="m-empty">没有即将到来的事件</div>
-            ) : (
-              upcoming.map(([d, list]) => (
-                <div className="m-group" key={d}>
-                  <div className="m-group-date">{dayLabel(d)}</div>
-                  {list.map((o) => (
-                    <button className="m-group-item" key={`${o.event.id}-${o.date}`} onClick={() => setDate(d)}>
-                      <div
-                        className="m-event-bar"
-                        style={{ background: o.event.color ?? 'var(--m-accent)', height: 26 }}
-                      />
-                      <div className="m-group-main">
-                        <div className="m-group-title">{o.event.title}</div>
-                        <div className="m-group-sub">
-                          {[eventTime(o.event), eventKindLabel(o.event)]
-                            .filter(Boolean)
-                            .join(' · ')}
-                        </div>
-                      </div>
-                      {o.done && <span className="m-group-done">{Icon.check}</span>}
+        <motion.div
+          key={tab}
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: DUR.base, ease: EASE_OUT }}
+        >
+          {tab === 'month' && (
+            <>
+              {/* 月历网格：左右滑切换月份，新月份从手指来的那一侧滑进来 */}
+              <motion.div
+                className="m-grid"
+                key={date.slice(0, 7)}
+                initial={{ opacity: 0, x: dir * 16 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ duration: 0.26, ease: EASE_EMPHASIZED }}
+                onTouchStart={onGridTouchStart}
+                onTouchMove={onGridTouchMove}
+                onTouchEnd={onGridTouchEnd}
+              >
+                {DOW.map((w) => (
+                  <div className="m-grid-dow" key={w}>
+                    {w}
+                  </div>
+                ))}
+                {monthGrid.map((d) => {
+                  const inMonth = d.slice(0, 7) === date.slice(0, 7)
+                  const c = dayCounts[d]
+                  return (
+                    <button
+                      key={d}
+                      className={[
+                        'm-grid-cell',
+                        inMonth ? '' : 'm-grid-out',
+                        d === today ? 'm-grid-today' : '',
+                        d === date ? 'm-grid-selected' : ''
+                      ]
+                        .filter(Boolean)
+                        .join(' ')}
+                      onClick={() => setDate(d)}
+                      aria-pressed={d === date}
+                    >
+                      <span className="m-grid-num">{Number(d.slice(8))}</span>
+                      <span className="m-grid-dots">
+                        {c?.tasks ? <i className="m-grid-dot m-grid-dot-task" /> : null}
+                        {c?.events ? <i className="m-grid-dot m-grid-dot-event" /> : null}
+                      </span>
                     </button>
-                  ))}
-                </div>
-              ))
-            )}
-          </div>
-        )}
+                  )
+                })}
+              </motion.div>
 
-        {tab === 'settings' && (
-          <div className="m-list">
-            <div className="m-group">
-              <div className="m-group-date">已配对设备</div>
-              {devices.length === 0 ? (
-                <div className="m-empty">读不到设备列表</div>
+              {/* 当天详情：日期标题 + 合并后的任务/事件列表 */}
+              <motion.div
+                className="m-day"
+                key={date}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: DUR.base, ease: EASE_OUT }}
+              >
+                <div className="m-day-head">
+                  <span className="m-day-title">{dayLabel(date)}</span>
+                  {date !== today && (
+                    <motion.button
+                      className="m-today-btn"
+                      whileTap={{ scale: 0.94 }}
+                      onClick={() => setDate(today)}
+                    >
+                      今天
+                    </motion.button>
+                  )}
+                </div>
+
+                {/* 任务是"只属于这一天"，事件是"可以重复的任务"，本质是同一件事，
+                    所以合成一张卡片，只用一个标签区分。 */}
+                <div className="m-section">
+                  <div className="m-section-head">
+                    <span>这一天</span>
+                  </div>
+                  <div className="m-card">
+                    {dayItems.length === 0 ? (
+                      <div className="m-empty">这一天还没有安排</div>
+                    ) : (
+                      dayItems.map((it) =>
+                        it.type === 'event' ? (
+                          <div className="m-task" key={`e-${it.occ.event.id}-${it.occ.date}`}>
+                            <button
+                              className={`m-task-check ${it.occ.done ? 'm-task-check-on' : ''}`}
+                              onClick={() => void toggleEvent(it.occ)}
+                              aria-label={it.occ.done ? '取消完成' : '完成'}
+                            >
+                              {it.occ.done && Icon.check}
+                            </button>
+                            <span className={`m-task-text ${it.occ.done ? 'm-task-done' : ''}`}>
+                              {it.occ.event.title}
+                            </span>
+                            {eventKindLabel(it.occ.event) && (
+                              <span className="m-task-tag">{eventKindLabel(it.occ.event)}</span>
+                            )}
+                            <button
+                              className="m-task-del"
+                              onClick={() => void removeEvent(it.occ)}
+                              aria-label="删除"
+                            >
+                              {Icon.trash}
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="m-task" key={`l-${it.index}-${it.text}`}>
+                            <button
+                              className={`m-task-check ${it.done ? 'm-task-check-on' : ''}`}
+                              onClick={() => void toggleTask(it.index)}
+                              aria-label={it.done ? '取消完成' : '完成'}
+                            >
+                              {it.done && Icon.check}
+                            </button>
+                            <span className={`m-task-text ${it.done ? 'm-task-done' : ''}`}>
+                              {lineText(it.text)}
+                            </span>
+                            <button
+                              className="m-task-del"
+                              onClick={() => void removeTask(it.index)}
+                              aria-label="删除"
+                            >
+                              {Icon.trash}
+                            </button>
+                          </div>
+                        )
+                      )
+                    )}
+                  </div>
+                </div>
+              </motion.div>
+            </>
+          )}
+
+          {tab === 'upcoming' && (
+            <div className="m-list">
+              {upcoming.length === 0 ? (
+                <div className="m-empty">没有即将到来的事件</div>
               ) : (
-                devices.map((d) => (
-                  <div className="m-group-item" key={d.deviceId}>
-                    <div className="m-group-main">
-                      <div className="m-group-title">
-                        {d.name || d.deviceId.slice(0, 8)}
-                        {d.current ? '（本机）' : ''}
-                      </div>
-                      <div className="m-group-sub">
-                        {d.status === 'approved' ? '已授权' : d.status}
-                        {d.lastSeenAt ? ` · ${new Date(d.lastSeenAt).toLocaleString('zh-CN')}` : ''}
-                      </div>
+                upcoming.map(([d, list]) => (
+                  <div className="m-group" key={d}>
+                    <div className="m-group-date">{dayLabel(d)}</div>
+                    <div className="m-card">
+                      {list.map((o) => (
+                        <button
+                          className="m-group-item"
+                          key={`${o.event.id}-${o.date}`}
+                          onClick={() => setDate(d)}
+                        >
+                          <div
+                            className="m-event-bar"
+                            style={{ background: o.event.color ?? 'var(--m-accent)' }}
+                          />
+                          <div className="m-group-main">
+                            <div className="m-group-title">{o.event.title}</div>
+                            <div className="m-group-sub">
+                              {[eventTime(o.event), eventKindLabel(o.event)]
+                                .filter(Boolean)
+                                .join(' · ')}
+                            </div>
+                          </div>
+                          {o.done && <span className="m-group-done">{Icon.check}</span>}
+                        </button>
+                      ))}
                     </div>
                   </div>
                 ))
               )}
             </div>
-            <div className="m-group">
-              <div className="m-group-date">日历</div>
-              {calendars.map((c) => (
-                <div className="m-group-item" key={c.id}>
-                  <div className="m-event-bar" style={{ background: c.color, height: 26 }} />
-                  <div className="m-group-main">
-                    <div className="m-group-title">{c.name}</div>
-                  </div>
+          )}
+
+          {tab === 'settings' && (
+            <div className="m-list">
+              <div className="m-group">
+                <div className="m-group-date">已配对设备</div>
+                <div className="m-card">
+                  {devices.length === 0 ? (
+                    <div className="m-empty">读不到设备列表</div>
+                  ) : (
+                    devices.map((d) => (
+                      <div className="m-group-item" key={d.deviceId}>
+                        <div className="m-group-main">
+                          <div className="m-group-title">
+                            {d.name || d.deviceId.slice(0, 8)}
+                            {d.current ? '（本机）' : ''}
+                          </div>
+                          <div className="m-group-sub">
+                            {d.status === 'approved' ? '已授权' : d.status}
+                            {d.lastSeenAt ? ` · ${seenAt(d.lastSeenAt)}` : ''}
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
-              ))}
-            </div>
-            <div className="m-group">
-              <div className="m-group-date">服务器</div>
-              <div className="m-group-item">
-                <div className="m-group-main">
-                  <div className="m-group-title">{serverUrl.replace(/^https?:\/\//, '')}</div>
+              </div>
+
+              <div className="m-group">
+                <div className="m-group-date">日历</div>
+                <div className="m-card">
+                  {calendars.map((c) => (
+                    <div className="m-group-item" key={c.id}>
+                      <div className="m-event-bar" style={{ background: c.color }} />
+                      <div className="m-group-main">
+                        <div className="m-group-title">{c.name}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="m-group">
+                <div className="m-group-date">服务器</div>
+                <div className="m-card">
+                  <div className="m-group-item">
+                    <div className="m-group-main">
+                      <div className="m-group-title">
+                        {serverUrl.replace(/^https?:\/\//, '')}
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
+        </motion.div>
       </div>
 
       {/* 液态玻璃底栏：弹层打开时整条收起，别顶到键盘上面去 */}
@@ -735,21 +777,26 @@ export default function MobileApp(): React.JSX.Element {
       {/* 添加任务弹层 */}
       <AnimatePresence>
         {adding && (
-          <>
-            <motion.div
-              className="m-sheet-mask"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setAdding(false)}
-            />
-            <motion.div
-              className="m-sheet"
-              initial={{ y: '100%' }}
-              animate={{ y: 0 }}
-              exit={{ y: '100%' }}
-              transition={{ type: 'spring', stiffness: 420, damping: 36 }}
-            >
+          <motion.div
+            key="sheet-mask"
+            className="m-sheet-mask"
+            variants={fade}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            transition={{ duration: DUR.base, ease: EASE_OUT }}
+            onClick={() => setAdding(false)}
+          />
+        )}
+        {adding && (
+          <motion.div
+            key="sheet"
+            className="m-sheet"
+            initial={{ y: '100%' }}
+            animate={{ y: 0 }}
+            exit={{ y: '100%' }}
+            transition={{ duration: DUR.page, ease: EASE_EMPHASIZED }}
+          >
               <div className="m-sheet-handle" />
               <div className="m-sheet-title">添加到 {dayLabel(date).split(' ')[0]}</div>
               <input
@@ -775,20 +822,23 @@ export default function MobileApp(): React.JSX.Element {
                 </button>
               </div>
             </motion.div>
-          </>
         )}
       </AnimatePresence>
 
-      {toast && (
-        <motion.div
-          className="m-toast"
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0 }}
-        >
-          {toast}
-        </motion.div>
-      )}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            className="m-toast"
+            variants={riseIn(6)}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            transition={{ duration: DUR.base, ease: EASE_OUT }}
+          >
+            {toast}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

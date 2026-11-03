@@ -13,7 +13,7 @@ import { readFileSync, writeFileSync, existsSync, rmSync, mkdirSync } from 'node
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
-const BASE = 'https://caldesk.ilikeu.cc.cd'
+const BASE = 'https://your-worker.example.com'
 const APP = join(process.cwd(), 'release', 'win-unpacked', 'caldesk.exe')
 const USER_DATA = join(tmpdir(), 'caldesk-e2e-' + Date.now())
 

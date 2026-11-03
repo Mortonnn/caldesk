@@ -67,6 +67,8 @@ const themeArg = argValue('--theme')
 const openSettings = process.argv.includes('--open-settings')
 /** `--eval-file <path>`：截图前在渲染层执行一段脚本，用于端到端 UI 验证 */
 const evalFile = argValue('--eval-file')
+/** 登录自启时由启动项带上：只起托盘与浮窗，不弹主窗口 */
+const startHidden = process.argv.includes('--hidden')
 
 type ThemeMode = 'system' | 'light' | 'dark'
 
@@ -126,6 +128,8 @@ interface WindowState {
   maximized: boolean
   miniVisible: boolean
   miniPinned: boolean
+  /** 登录 Windows 后自动启动：默认开，启动到托盘不弹主窗口 */
+  autoStart: boolean
   /** 默认跟随系统 */
   themeMode: ThemeMode
 }
@@ -138,6 +142,8 @@ const DEFAULT_STATE: WindowState = {
   miniVisible: true,
   // 默认不压在所有窗口之上：需要时用浮窗上的图钉自己钉住
   miniPinned: false,
+  // 默认开机自启：这是个"每天都会看一眼"的日历，登录后安静待在托盘里最合适
+  autoStart: true,
   themeMode: 'system'
 }
 
@@ -263,6 +269,26 @@ function ensureMiniWindow(): void {
   persistState()
 }
 
+/**
+ * 把「开机自启动」写进系统登录项。
+ *
+ * 路径固定取当前 exe：升级、换安装目录之后再调一次就能修正旧路径。
+ * 开发环境不写——否则注册表里会留下一个指向 electron.exe 的启动项。
+ * 带上 --hidden，登录时只起托盘与浮窗，不会把主窗口怼到脸上。
+ */
+function applyAutoStart(): void {
+  if (!app.isPackaged) return
+  try {
+    app.setLoginItemSettings({
+      openAtLogin: state.autoStart,
+      path: process.execPath,
+      args: ['--hidden']
+    })
+  } catch (err) {
+    console.error('[caldesk] 设置开机自启失败:', (err as Error).message)
+  }
+}
+
 function createTray(): void {
   if (tray) return
   const image = nativeImage.createFromPath(appIconPath())
@@ -331,7 +357,8 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     if (shotPath) mainWindow?.showInactive()
-    else mainWindow?.show()
+    // 登录自启：只留托盘和浮窗，主窗口等用户点托盘再出来
+    else if (!startHidden) mainWindow?.show()
   })
 
   const remember = (): void => {
@@ -885,8 +912,16 @@ ipcMain.handle('window:is-maximized', () => mainWindow?.isMaximized() ?? false)
 
 ipcMain.handle('settings:get', () => ({
   miniVisible: state.miniVisible,
-  miniPinned: state.miniPinned
+  miniPinned: state.miniPinned,
+  autoStart: state.autoStart
 }))
+
+ipcMain.handle('settings:set-auto-start', (_e, on: boolean) => {
+  state.autoStart = Boolean(on)
+  persistState()
+  applyAutoStart()
+  return state.autoStart
+})
 
 ipcMain.handle('mini:set-visible', (_e, visible: boolean) => {
   if (visible) {
@@ -1001,13 +1036,7 @@ app.whenReady().then(async () => {
   createTray()
 
   // 开机自启（仅打包后注册，避免开发时把 electron.exe 写进启动项）
-  if (app.isPackaged) {
-    try {
-      app.setLoginItemSettings({ openAtLogin: true })
-    } catch (err) {
-      console.error('[caldesk] 设置开机自启失败:', (err as Error).message)
-    }
-  }
+  applyAutoStart()
 
   if (state.miniVisible || shotMiniPath) createMiniWindow()
 

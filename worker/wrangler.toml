@@ -7,7 +7,8 @@ compatibility_date = "2025-01-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "caldesk"
-database_id = "fbf5eb0b-3c5d-4726-85ba-511410db0d6f"
+# 换成你自己的 D1 数据库 id：wrangler d1 create caldesk 之后它会打印出来
+database_id = "<你的 D1 database_id>"
 
 # 建表不需要手工执行 SQL：Worker 首次请求时会跑 src/schema.ts 里的
 # CREATE TABLE IF NOT EXISTS（每个 isolate 一次）。

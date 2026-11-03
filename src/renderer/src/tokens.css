@@ -1,55 +1,103 @@
 /**
- * 主题令牌：深色 / 浅色。
+ * 主题令牌：浅色 = 纸，深色 = 墨。
  *
  * 由主进程的 nativeTheme.themeSource 决定（system | light | dark），
- * 渲染层只依赖 prefers-color-scheme，因此主窗口与桌面浮窗自动保持一致。
- * 组件只允许引用变量，不得硬编码颜色。
+ * 渲染层只依赖 prefers-color-scheme，因此主窗口、手机端与桌面浮窗自动一致。
+ *
+ * 组件只引用变量，不写死颜色：
+ *  - 页面 --bg、纸面 --surface、抬起面 --surface-2 是同一支冷灰墨色阶；
+ *  - 文字只有三级（primary / dim / faint）；
+ *  - 颜色只出现在 --accent（选中、主操作）和日历视图自带的色点上。
  */
 
 :root {
   color-scheme: dark;
-  --bg: #0e1116;
-  --bg-solid: #12151b;
-  --bg-elev: rgba(255, 255, 255, 0.035);
+
+  /* 墨色阶 */
+  --bg: #0c0e12;
+  --bg-solid: #0c0e12;
+  --surface: #14171d;
+  --surface-2: #1b1f27;
+  --bg-elev: rgba(255, 255, 255, 0.03);
   --bg-elev-2: rgba(255, 255, 255, 0.06);
-  --stroke: rgba(255, 255, 255, 0.08);
-  --stroke-strong: rgba(255, 255, 255, 0.14);
-  --text: rgba(255, 255, 255, 0.94);
-  --text-dim: rgba(255, 255, 255, 0.55);
-  --text-faint: rgba(255, 255, 255, 0.32);
+  --glass: #0f1216;
+  --panel: #101319;
+  --bg-soft: rgba(255, 255, 255, 0.04);
+
+  /* 描边 */
+  --stroke: rgba(255, 255, 255, 0.07);
+  --stroke-strong: rgba(255, 255, 255, 0.13);
+
+  /* 文字 */
+  --text: #e9ecf1;
+  --text-dim: #9aa2b0;
+  --text-faint: #79818f;
+
+  /* 强调色：纸上的蓝墨 */
   --accent: #5b8cff;
-  --accent-soft: rgba(91, 140, 255, 0.16);
-  --accent-text: #a9c0ff;
-  --accent-glow: rgba(91, 140, 255, 0.16);
-  --accent-glow-2: rgba(61, 220, 151, 0.1);
+  --accent-soft: rgba(91, 140, 255, 0.14);
+  --accent-text: #9fbcff;
+  --accent-ink: #ffffff;
+
   --danger: #e5484d;
-  --glass: rgba(14, 17, 22, 0.92);
-  --panel: rgba(18, 21, 27, 0.86);
-  --shadow: rgba(0, 0, 0, 0.42);
-  --scrim: rgba(0, 0, 0, 0.42);
+  --danger-soft: rgba(229, 72, 77, 0.14);
+
+  /* 阴影：深色下靠面与发丝线，不靠阴影；只有浮层允许一点中性投影 */
+  --shadow: rgba(0, 0, 0, 0.5);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 18px 48px rgba(0, 0, 0, 0.5);
+
+  --scrim: rgba(4, 6, 10, 0.56);
+
+  /* 动效：与 motion.ts 同源 */
+  --ease: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --t-fast: 140ms;
+  --t-base: 220ms;
+  --t-page: 320ms;
 }
 
 @media (prefers-color-scheme: light) {
   :root {
     color-scheme: light;
-    --bg: #f4f5f8;
-    --bg-solid: #ffffff;
-    --bg-elev: rgba(16, 20, 28, 0.04);
-    --bg-elev-2: rgba(16, 20, 28, 0.07);
-    --stroke: rgba(16, 20, 28, 0.1);
-    --stroke-strong: rgba(16, 20, 28, 0.16);
-    --text: rgba(16, 20, 28, 0.92);
-    --text-dim: rgba(16, 20, 28, 0.58);
-    --text-faint: rgba(16, 20, 28, 0.4);
+
+    --bg: #eef1f5;
+    --bg-solid: #eef1f5;
+    --surface: #ffffff;
+    --surface-2: #f1f3f7;
+    --bg-elev: rgba(17, 22, 30, 0.04);
+    --bg-elev-2: rgba(17, 22, 30, 0.07);
+    --glass: #f7f9fb;
+    --panel: #fbfcfe;
+    --bg-soft: rgba(17, 22, 30, 0.045);
+
+    --stroke: rgba(17, 22, 30, 0.08);
+    --stroke-strong: rgba(17, 22, 30, 0.15);
+
+    --text: #12161d;
+    --text-dim: #4f5866;
+    --text-faint: #6d7684;
+
     --accent: #2f6bff;
-    --accent-soft: rgba(47, 107, 255, 0.12);
-    --accent-text: #2f6bff;
-    --accent-glow: rgba(47, 107, 255, 0.12);
-    --accent-glow-2: rgba(20, 180, 120, 0.08);
+    --accent-soft: rgba(47, 107, 255, 0.1);
+    --accent-text: #2456d8;
+    --accent-ink: #ffffff;
+
     --danger: #d92d20;
-    --glass: rgba(250, 251, 252, 0.94);
-    --panel: rgba(255, 255, 255, 0.92);
-    --shadow: rgba(16, 20, 28, 0.16);
-    --scrim: rgba(16, 20, 28, 0.28);
+    --danger-soft: rgba(217, 45, 32, 0.09);
+
+    --shadow: rgba(17, 22, 30, 0.18);
+    --shadow-sm: 0 1px 2px rgba(17, 22, 30, 0.06);
+    --shadow-md: 0 20px 48px rgba(17, 22, 30, 0.12);
+
+    --scrim: rgba(17, 22, 30, 0.28);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --t-fast: 1ms;
+    --t-base: 1ms;
+    --t-page: 1ms;
   }
 }
