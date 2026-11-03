@@ -133,7 +133,7 @@ textarea {
 /* 顶栏 */
 .m-top {
   flex: none;
-  padding: calc(var(--m-safe-top) + 10px) 16px 10px;
+  padding: calc(var(--m-safe-top) + 12px) 16px 12px;
   background: var(--m-surface);
   border-bottom: 1px solid var(--m-stroke);
   display: flex;
@@ -147,18 +147,140 @@ textarea {
 }
 
 .m-top-month {
-  font-size: 20px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  font-size: 25px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
 }
 
-.m-top-sub {
-  font-size: 12px;
-  color: var(--m-text-2);
-  margin-top: 1px;
+/* 右上角日历切换按钮：点开是 FlClash 那种列表弹出 */
+.m-cal-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 10px 0 9px;
+  border-radius: 999px;
+  background: var(--m-surface-2);
+  color: var(--m-text);
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+.m-cal-btn.on {
+  background: var(--m-accent-soft);
+  color: var(--m-accent);
+}
+
+.m-cal-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.m-cal-name {
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.m-cal-chev {
+  display: grid;
+  place-items: center;
+  color: var(--m-text-3);
+  transition: transform 0.2s ease;
+}
+
+.m-cal-btn.on .m-cal-chev {
+  transform: rotate(180deg);
+  color: var(--m-accent);
+}
+
+.m-cal-chev svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* 日历切换弹出：圆角卡片 + 列表 + 右侧打勾 */
+.m-menu-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: transparent;
+}
+
+.m-menu {
+  position: fixed;
+  top: calc(var(--m-safe-top) + 56px);
+  right: 12px;
+  z-index: 71;
+  min-width: 176px;
+  max-width: 74vw;
+  padding: 6px;
+  border-radius: 18px;
+  background: var(--m-surface);
+  border: 1px solid var(--m-stroke);
+  box-shadow:
+    0 18px 44px rgba(12, 16, 26, 0.2),
+    0 3px 10px rgba(12, 16, 26, 0.08);
+  transform-origin: top right;
+  overflow: hidden;
+}
+
+.m-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 46px;
+  padding: 0 12px;
+  border-radius: 13px;
+  color: var(--m-text);
+  font-size: 15.5px;
+  font-weight: 500;
+  text-align: left;
+  transition: background 0.14s;
+}
+
+.m-menu-item:active {
+  background: var(--m-surface-2);
+}
+
+.m-menu-item.on {
+  background: var(--m-accent-soft);
+  color: var(--m-accent);
+  font-weight: 650;
+}
+
+.m-menu-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.m-menu-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.m-menu-check {
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: var(--m-accent);
+}
+
+.m-menu-check svg {
+  width: 17px;
+  height: 17px;
 }
 
 .m-chip {
@@ -365,6 +487,25 @@ textarea {
   height: 24px;
 }
 
+/* 「回到今天」：和右下角 + 同一套圆钮样式，只是小一号 */
+.m-today-btn {
+  flex: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--m-accent);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  box-shadow:
+    0 6px 14px rgba(47, 111, 237, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  -webkit-tap-highlight-color: transparent;
+}
+
 /* ------------------------------ 月历网格 ------------------------------ */
 
 .m-grid {
@@ -372,6 +513,8 @@ textarea {
   grid-template-columns: repeat(7, 1fr);
   gap: 3px;
   padding: 10px 8px 4px;
+  /* 横向位移交给 JS 翻月，纵向仍然让页面滚动，别让浏览器把横向手势吞掉 */
+  touch-action: pan-y;
 }
 
 .m-grid-dow {
@@ -385,12 +528,16 @@ textarea {
 .m-grid-cell {
   aspect-ratio: 1;
   border-radius: 11px;
+  position: relative;
+  /* 数字绝对居中：圆点单独定位到底部，不参与居中计算 */
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
-  position: relative;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
   transition:
     transform 0.12s,
     background 0.15s;
@@ -404,7 +551,9 @@ textarea {
   font-size: 15px;
   font-weight: 550;
   font-variant-numeric: tabular-nums;
-  line-height: 1.1;
+  line-height: 1;
+  /* 没有圆点的月份也不会因为行高差一点而偏上 */
+  display: block;
 }
 
 .m-grid-out .m-grid-num {
@@ -440,10 +589,16 @@ textarea {
 }
 
 .m-grid-dots {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 5px;
   display: flex;
+  justify-content: center;
   gap: 2px;
   height: 4px;
   align-items: center;
+  pointer-events: none;
 }
 
 .m-grid-dot {
@@ -497,9 +652,10 @@ textarea {
 
 .m-day-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
   padding: 12px 2px 10px;
+  min-height: 38px;
 }
 
 .m-day-title {
@@ -507,11 +663,9 @@ textarea {
   font-weight: 650;
 }
 
-.m-day-today {
+/* 「今」靠右，垂直居中对齐标题 */
+.m-day-head .m-today-btn {
   margin-left: auto;
-  font-size: 12.5px;
-  color: var(--m-accent);
-  font-weight: 550;
 }
 
 .m-section {

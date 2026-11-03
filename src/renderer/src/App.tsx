@@ -660,18 +660,19 @@ export default function App(): React.JSX.Element {
    *
    * 用户视角它们是同一件事：都是"某天要做的事"，
    * 区别只是任务只属于这一天，事件可以重复。
-   * 顺序：先事件（可重复的、有颜色的），再当天的普通任务。
+   *
+   * 排序：未完成在上、已完成在下；组内保持创建顺序
+   * （事件按 createdAt，任务行按行号；稳定排序不会打乱组内次序）。
    */
   const selectedItems = [
-    ...selectedEvents.map((occ) => ({
-      type: 'event' as const,
-      occ,
-      done: occ.done
-    })),
+    ...selectedEvents
+      .slice()
+      .sort((a, b) => (a.event.createdAt ?? 0) - (b.event.createdAt ?? 0))
+      .map((occ) => ({ type: 'event' as const, occ, done: occ.done })),
     ...selectedLines
       .map((text, index) => ({ type: 'line' as const, text, index, done: isDoneLine(text) }))
       .filter((l) => l.text.trim().length > 0)
-  ]
+  ].sort((a, b) => Number(a.done) - Number(b.done))
 
   /* ------------------------------ 便签与搜索 ------------------------------ */
 

@@ -27,6 +27,9 @@ const Icon = {
   chevronRight: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
   ),
+  chevronDown: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+  ),
   check: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
   ),
@@ -76,6 +79,20 @@ function monthLabel(iso: string): string {
   return `${d.getFullYear()}年${d.getMonth() + 1}月`
 }
 
+/**
+ * 按月翻页，**保留日号**（超出当月天数就落到月末）。
+ *
+ * 左右滑月份时如果每次跳回 1 号，滑两下就不知道自己在看哪天，
+ * 所以这里保持 3 号滑过去还是 3 号。
+ */
+function shiftMonth(iso: string, delta: number): string {
+  const d = new Date(`${iso}T00:00:00`)
+  const target = new Date(d.getFullYear(), d.getMonth() + delta, 1)
+  const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate()
+  const day = Math.min(d.getDate(), lastDay)
+  return `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+}
+
 function dayLabel(iso: string): string {
   const d = new Date(`${iso}T00:00:00`)
   return `${d.getMonth() + 1}月${d.getDate()}日 星期${DOW[(d.getDay() + 6) % 7]}`
@@ -123,6 +140,10 @@ export default function MobileApp(): React.JSX.Element {
   const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL)
   const [devices, setDevices] = useState<DeviceListResult['devices']>([])
   const [loadError, setLoadError] = useState<string | null>(null)
+  /** 右上角日历切换菜单 */
+  const [calMenu, setCalMenu] = useState(false)
+  /** 月视图左右滑动手势 */
+  const swipeRef = useRef<{ x: number; y: number; axis: 'x' | 'y' | null } | null>(null)
   /**
    * 上次看到的服务端水位。
    *
@@ -267,15 +288,22 @@ export default function MobileApp(): React.JSX.Element {
   /**
    * 当天要显示的东西：任务和事件合成一个列表。
    *
-   * 事件（可重复的）排前面，当天普通任务排后面，
-   * 每行右边用一个小标签区分"当天"还是重复规则。
+   * 排序规则（用户指定）：
+   *   1. 未完成在上，已完成在下；
+   *   2. 组内按创建顺序，先创建的在前面。
+   *
+   * 事件有 createdAt，任务行本身没有时间戳，行号就是创建顺序，
+   * 所以先按「事件（按 createdAt）→ 任务行（按行号）」拼出创建顺序，
+   * 再用稳定排序把已完成的挪到后面 —— 稳定排序保证组内顺序不变。
    */
   const dayItems = useMemo(() => {
-    const evs = dayEvents.map((occ) => ({ type: 'event' as const, occ }))
+    const evs = [...dayEvents]
+      .sort((a, b) => (a.event.createdAt ?? 0) - (b.event.createdAt ?? 0))
+      .map((occ) => ({ type: 'event' as const, occ, done: occ.done }))
     const lns = lines
       .map((text, index) => ({ type: 'line' as const, text, index, done: isDoneLine(text) }))
       .filter((l) => l.text.trim().length > 0)
-    return [...evs, ...lns]
+    return [...evs, ...lns].sort((a, b) => Number(a.done) - Number(b.done))
   }, [dayEvents, lines])
 
   /** 当前月份的网格（6 行 × 7 列，周一起） */
@@ -374,6 +402,46 @@ export default function MobileApp(): React.JSX.Element {
     if (calId) await loadRange(calId, date)
   }
 
+  /* ------------------------------ 手势 ------------------------------ */
+
+  /**
+   * 月视图左右滑切换月份。
+   *
+   * 只有"横向位移明显大于纵向、且超过阈值"才算翻月，
+   * 免得上下滚动列表时误触发；手指按下再抬起没怎么动就是普通点选日期。
+   */
+  function onGridTouchStart(e: React.TouchEvent): void {
+    const t = e.touches[0]
+    swipeRef.current = { x: t.clientX, y: t.clientY, axis: null }
+  }
+
+  function onGridTouchMove(e: React.TouchEvent): void {
+    const s = swipeRef.current
+    if (!s) return
+    const t = e.touches[0]
+    const dx = t.clientX - s.x
+    const dy = t.clientY - s.y
+    if (s.axis === null && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
+      s.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y'
+    }
+  }
+
+  function onGridTouchEnd(e: React.TouchEvent): void {
+    const s = swipeRef.current
+    swipeRef.current = null
+    if (!s) return
+    const t = e.changedTouches[0]
+    const dx = t.clientX - s.x
+    const dy = t.clientY - s.y
+    // 不依赖 touchmove 里锁定的方向：合成手势的 move 可能被浏览器合并，
+    // 直接看起止点的总位移最稳。
+    if (s.axis === 'y') return
+    if (Math.abs(dy) > Math.abs(dx)) return
+    if (Math.abs(dx) > 56) {
+      setDate((prev) => shiftMonth(prev, dx < 0 ? 1 : -1))
+    }
+  }
+
   /* ------------------------------ 渲染 ------------------------------ */
 
   if (!ready) {
@@ -393,39 +461,57 @@ export default function MobileApp(): React.JSX.Element {
 
   return (
     <div className="m-shell">
-      {/* 顶栏 */}
+      {/* 顶栏：只留月份 + 日历切换。翻月靠左右滑，不再放 ‹ › 按钮 */}
       <header className="m-top">
         <div className="m-top-title">
-          <div className="m-top-month">
-            {monthLabel(date)}
-            <div className="m-step">
-              <button className="m-step-btn" onClick={() => setDate(addMonths(date, -1))} aria-label="上个月">
-                {Icon.chevronLeft}
-              </button>
-              <button className="m-step-btn" onClick={() => setDate(addMonths(date, 1))} aria-label="下个月">
-                {Icon.chevronRight}
-              </button>
-            </div>
-          </div>
-          <div className="m-top-sub">
-            {cal ? cal.name : '未选择日历'} · 今天 {dayLabel(today).split(' ')[0]}
-          </div>
+          <div className="m-top-month">{monthLabel(date)}</div>
         </div>
-        {calendars.length > 1 && (
-          <select
-            className="m-chip"
-            value={calId}
-            onChange={(e) => setCalId(e.target.value)}
-            style={{ border: 'none' }}
+        {calendars.length > 0 && (
+          <button
+            className={`m-cal-btn ${calMenu ? 'on' : ''}`}
+            onClick={() => setCalMenu((v) => !v)}
+            aria-expanded={calMenu}
           >
-            {calendars.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
+            <span
+              className="m-cal-dot"
+              style={{ background: cal?.color ?? 'var(--m-accent)' }}
+            />
+            <span className="m-cal-name">{cal?.name ?? '日历'}</span>
+            <span className="m-cal-chev">{Icon.chevronDown}</span>
+          </button>
         )}
       </header>
+
+      {/* 日历切换：仿 FlClash 的列表式弹出，选中项右侧打勾 */}
+      <AnimatePresence>
+        {calMenu && (
+          <>
+            <div className="m-menu-mask" onClick={() => setCalMenu(false)} />
+            <motion.div
+              className="m-menu"
+              initial={{ opacity: 0, scale: 0.92, y: -10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94, y: -8 }}
+              transition={{ type: 'spring', stiffness: 460, damping: 34 }}
+            >
+              {calendars.map((c) => (
+                <button
+                  key={c.id}
+                  className={`m-menu-item ${c.id === calId ? 'on' : ''}`}
+                  onClick={() => {
+                    setCalId(c.id)
+                    setCalMenu(false)
+                  }}
+                >
+                  <span className="m-menu-dot" style={{ background: c.color }} />
+                  <span className="m-menu-label">{c.name}</span>
+                  {c.id === calId && <span className="m-menu-check">{Icon.check}</span>}
+                </button>
+              ))}
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
 
       {/* 内容 */}
       <div className="m-body">
@@ -436,8 +522,13 @@ export default function MobileApp(): React.JSX.Element {
         )}
         {tab === 'month' && (
           <>
-            {/* 月历网格 */}
-            <div className="m-grid">
+            {/* 月历网格：左右滑切换月份 */}
+            <div
+              className="m-grid"
+              onTouchStart={onGridTouchStart}
+              onTouchMove={onGridTouchMove}
+              onTouchEnd={onGridTouchEnd}
+            >
               {DOW.map((w) => (
                 <div className="m-grid-dow" key={w}>
                   {w}
@@ -469,14 +560,19 @@ export default function MobileApp(): React.JSX.Element {
               })}
             </div>
 
-            {/* 当天详情 */}
+            {/* 当天详情：日期标题 + 合并后的任务/事件列表 */}
             <div className="m-day">
               <div className="m-day-head">
                 <span className="m-day-title">{dayLabel(date)}</span>
                 {date !== today && (
-                  <button className="m-day-today" onClick={() => setDate(today)}>
-                    回到今天
-                  </button>
+                  <motion.button
+                    className="m-today-btn"
+                    whileTap={{ scale: 0.88 }}
+                    onClick={() => setDate(today)}
+                    aria-label="回到今天"
+                  >
+                    今
+                  </motion.button>
                 )}
               </div>
 
@@ -485,7 +581,6 @@ export default function MobileApp(): React.JSX.Element {
               <div className="m-section">
                 <div className="m-section-head">
                   <span>这一天</span>
-                  <button onClick={() => setAdding(true)}>添加</button>
                 </div>
                 {dayItems.length === 0 ? (
                   <div className="m-empty">这一天还没有安排</div>
@@ -563,7 +658,9 @@ export default function MobileApp(): React.JSX.Element {
                       <div className="m-group-main">
                         <div className="m-group-title">{o.event.title}</div>
                         <div className="m-group-sub">
-                          {eventTime(o.event)} · {eventKindLabel(o.event)}
+                          {[eventTime(o.event), eventKindLabel(o.event)]
+                            .filter(Boolean)
+                            .join(' · ')}
                         </div>
                       </div>
                       {o.done && <span className="m-group-done">{Icon.check}</span>}
@@ -621,17 +718,19 @@ export default function MobileApp(): React.JSX.Element {
         )}
       </div>
 
-      {/* 液态玻璃底栏 */}
-      <GlassDock
-        items={[
-          { key: 'month', label: '日历', icon: Icon.calendar },
-          { key: 'upcoming', label: '即将', icon: Icon.clock },
-          { key: 'settings', label: '设置', icon: Icon.settings }
-        ]}
-        active={tab}
-        onSelect={(k) => setTab(k as Tab)}
-        onAdd={() => setAdding(true)}
-      />
+      {/* 液态玻璃底栏：弹层打开时整条收起，别顶到键盘上面去 */}
+      {!adding && (
+        <GlassDock
+          items={[
+            { key: 'month', label: '日历', icon: Icon.calendar },
+            { key: 'upcoming', label: '即将', icon: Icon.clock },
+            { key: 'settings', label: '设置', icon: Icon.settings }
+          ]}
+          active={tab}
+          onSelect={(k) => setTab(k as Tab)}
+          onAdd={() => setAdding(true)}
+        />
+      )}
 
       {/* 添加任务弹层 */}
       <AnimatePresence>
