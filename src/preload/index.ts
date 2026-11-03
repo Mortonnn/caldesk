@@ -131,6 +131,10 @@ const api = {
       ipcRenderer.invoke('sync:pair-join', payload) as Promise<
         IpcResult<{ status: 'pending' | 'approved' | 'rejected' | 'expired' }>
       >,
+    pairStatus: (payload: string) =>
+      ipcRenderer.invoke('sync:pair-status', payload) as Promise<
+        IpcResult<{ status: 'pending' | 'approved' | 'rejected' | 'expired' | 'unknown' }>
+      >,
     pairPending: (pairId: string) =>
       ipcRenderer.invoke('sync:pair-pending', pairId) as Promise<
         IpcResult<Array<{ deviceId: string; name: string; createdAt: number }>>

@@ -31,17 +31,18 @@ export default function Setup(): React.JSX.Element {
         return
       }
       setStatus('申请已发送，等电脑批准…')
-      // 轮询状态：批准后就能用了
+      // 轮询状态：批准后就能用了。
+      // 注意只查状态，不要重复提交 join（重复 join 会因为设备已存在而报错）
       for (let i = 0; i < 60; i += 1) {
         await new Promise((r) => setTimeout(r, 1500))
-        const again = await data.sync.pairJoin(pairText)
-        if (!again.ok) continue
-        if (again.data.status === 'approved') {
+        const st = await data.sync.pairStatus(pairText)
+        if (!st.ok) continue
+        if (st.data.status === 'approved') {
           setStatus('已批准，正在进入…')
           setTimeout(() => location.reload(), 600)
           return
         }
-        if (again.data.status === 'rejected' || again.data.status === 'expired') {
+        if (st.data.status === 'rejected' || st.data.status === 'expired') {
           setError('电脑拒绝了这次配对')
           setStatus(null)
           return

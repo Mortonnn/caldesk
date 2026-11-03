@@ -383,12 +383,14 @@ async function joinPairing(req: Request, env: Env): Promise<Response> {
   if (pairing.expires_at <= Date.now()) return fail(410, 'pairing_expired', '配对码已过期')
   if (!timingSafeEqual(code, pairing.code)) return fail(403, 'invalid_code', '配对码不正确')
 
-  const existing = await firstRow<{ device_id: string; status: string }>(
+  const existing = await firstRow<{ device_id: string; account_id: string; status: string }>(
     env,
-    'SELECT device_id, status FROM devices WHERE device_id = ?',
+    'SELECT device_id, account_id, status FROM devices WHERE device_id = ?',
     deviceId
   )
   if (existing && existing.status === 'approved') {
+    // 已经在同一个账号里：幂等，直接返回成功（手机重装/重试时会走到这里）
+    if (existing.account_id === pairing.account_id) return json({ ok: true, alreadyApproved: true })
     return fail(409, 'device_exists', '该设备已加入其它账号')
   }
 

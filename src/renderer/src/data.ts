@@ -99,6 +99,23 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
     saveMobileIdentity(mobile)
   }
 
+  /** 查配对状态；批准后把 accountId 存下来（这时这台手机才真正入伙） */
+  async function mobilePairStatus(
+    parsed: { u: string; p: string; c: string }
+  ): Promise<IpcResult<{ status: string }>> {
+    const st = await fetch(
+      `${parsed.u}/pair/status?pairId=${encodeURIComponent(parsed.p)}` +
+        `&deviceId=${encodeURIComponent(mobile.deviceId)}&code=${encodeURIComponent(parsed.c)}`
+    )
+    const body = (await st.json()) as { status?: string; accountId?: string }
+    const status = body.status ?? 'pending'
+    if (status === 'approved' && body.accountId) {
+      mobile.accountId = body.accountId
+      saveMobileIdentity(mobile)
+    }
+    return { ok: true, data: { status } }
+  }
+
   async function req<T>(path: string, init?: RequestInit): Promise<IpcResult<T>> {
     try {
       const res = await fetch(base + path, {
@@ -369,20 +386,16 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
             })
           })
           if (!res.ok) return { ok: false as const, error: `${res.status}：${(await res.text()).slice(0, 160)}` }
-          const st = await fetch(
-            `${parsed.u}/pair/status?pairId=${encodeURIComponent(parsed.p)}&deviceId=${encodeURIComponent(mobile.deviceId)}&code=${encodeURIComponent(parsed.c)}`
-          )
-          const body = (await st.json()) as { status?: string; accountId?: string }
-          const status = body.status ?? 'pending'
-          // 批准后服务端会给出 accountId，这时这台手机才算真正加入账号
-          if (status === 'approved' && body.accountId) {
-            mobile.accountId = body.accountId
-            saveMobileIdentity(mobile)
-          }
-          return {
-            ok: true as const,
-            data: { status: status as 'pending' | 'approved' | 'rejected' | 'expired' }
-          }
+          return await mobilePairStatus(parsed)
+        } catch (err) {
+          return { ok: false as const, error: (err as Error).message }
+        }
+      },
+      pairStatus: async (payloadText: string) => {
+        try {
+          const parsed = parsePairText(payloadText)
+          if (!parsed) return { ok: false as const, error: '二维码内容不对' }
+          return await mobilePairStatus(parsed)
         } catch (err) {
           return { ok: false as const, error: (err as Error).message }
         }
@@ -496,6 +509,7 @@ function createStub(): HostApi {
       createAccount: () => rejected<{ accountId: string }>('创建账号'),
       pairStart: () => rejected<PairStartResult>('配对'),
       pairJoin: () => rejected<{ status: string }>('配对'),
+      pairStatus: () => rejected<{ status: string }>('配对'),
       pairPending: () => rejected<PendingDeviceInfo[]>('待批准设备'),
       pairApprove: () => rejected<boolean>('批准设备'),
       pairReject: () => rejected<boolean>('拒绝设备'),

@@ -688,22 +688,47 @@ ipcMain.handle('sync:pair-join', async (_e, payloadText: string) => {
       signal: AbortSignal.timeout(20000)
     })
     if (!res.ok) return { ok: false, error: `HTTP ${res.status}: ${(await res.text()).slice(0, 160)}` }
-    const st = await fetch(
-      `${base}/pair/status?pairId=${encodeURIComponent(parsed.p)}` +
-        `&deviceId=${encodeURIComponent(id.deviceId)}&code=${encodeURIComponent(parsed.c)}`
-    )
-    const body = (await st.json()) as { status?: string; accountId?: string }
-    const status = body.status ?? 'pending'
-    // 批准后服务端给出 accountId，这时把这台设备正式记进账号
-    if (status === 'approved' && body.accountId && id.accountId !== body.accountId) {
-      saveIdentity(app.getPath('userData'), { ...id, accountId: body.accountId })
-      broadcastDataChanged()
-    }
-    return { ok: true, data: { status } }
+    return await pairStatusOf(base, parsed, id)
   } catch (err) {
     return { ok: false, error: (err as Error).message }
   }
 })
+
+/**
+ * 查这次配对的状态（不重复提交 join）。
+ * 批准后服务端给出 accountId，这时把这台设备正式记进账号。
+ */
+ipcMain.handle('sync:pair-status', async (_e, payloadText: string) => {
+  try {
+    const parsed = parsePairingQr(payloadText)
+    if (!parsed) return { ok: false, error: '二维码内容不对' }
+    const base = parsed.u.replace(/\/$/, '')
+    const id = ensureIdentity(app.getPath('userData'), { serverUrl: base })
+    return await pairStatusOf(base, parsed, id)
+  } catch (err) {
+    return { ok: false, error: (err as Error).message }
+  }
+})
+
+/** 查配对状态；批准时把 accountId 落盘 */
+async function pairStatusOf(
+  base: string,
+  parsed: { p: string; c: string },
+  id: StoredIdentity
+): Promise<{ ok: true; data: { status: string } } | { ok: false; error: string }> {
+  const st = await fetch(
+    `${base}/pair/status?pairId=${encodeURIComponent(parsed.p)}` +
+      `&deviceId=${encodeURIComponent(id.deviceId)}&code=${encodeURIComponent(parsed.c)}`,
+    { signal: AbortSignal.timeout(20000) }
+  )
+  const body = (await st.json()) as { status?: string; accountId?: string }
+  const status = body.status ?? 'pending'
+  if (status === 'approved' && body.accountId && id.accountId !== body.accountId) {
+    saveIdentity(app.getPath('userData'), { ...id, accountId: body.accountId })
+    broadcastDataChanged()
+  }
+  return { ok: true, data: { status } }
+}
 
 ipcMain.handle('sync:pair-pending', async (_e, pairId: string) => {
   try {
