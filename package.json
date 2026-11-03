@@ -1,53 +1,53 @@
-﻿{
-    "name":  "caldesk",
-    "version":  "0.1.0",
-    "description":  "A modern, agent-native desktop calendar",
-    "private":  true,
-    "main":  "./out/main/index.js",
-    "author":  "caldesk",
-    "license":  "MIT",
-    "bin":  {
-                "cal":  "bin/cal.mjs",
-                "cal-mcp":  "bin/cal-mcp.mjs"
-            },
-    "scripts":  {
-                    "dev":  "electron-vite dev",
-                    "build":  "electron-vite build",
-                    "build:mobile":  "vite build --config vite.mobile.config.ts",
-                    "sync:android":  "npm run build:mobile \u0026\u0026 cap sync android",
-                    "apk":  "npm run sync:android \u0026\u0026 cd android \u0026\u0026 gradlew assembleDebug",
-                    "start":  "electron-vite preview",
-                    "cal":  "node bin/cal.mjs",
-                    "typecheck:node":  "tsc --noEmit -p tsconfig.node.json",
-                    "typecheck:web":  "tsc --noEmit -p tsconfig.web.json",
-                    "typecheck":  "npm run typecheck:node \u0026\u0026 npm run typecheck:web",
-                    "test:rrule":  "node scripts/verify-rrule.mjs",
-                    "test:calendar":  "node scripts/verify-calendar.mjs",
-                    "pack":  "electron-vite build \u0026\u0026 electron-builder --dir",
-                    "dist":  "electron-vite build \u0026\u0026 electron-builder"
-                },
-    "dependencies":  {
-                         "@capacitor/android":  "^8.6.0",
-                         "@capacitor/core":  "^8.6.0",
-                         "@modelcontextprotocol/sdk":  "1.32.2",
-                         "date-fns":  "4.4.0",
-                         "qrcode":  "^1.5.4",
-                         "zod":  "4.6.7"
-                     },
-    "devDependencies":  {
-                            "@capacitor/cli":  "^8.6.0",
-                            "@types/node":  "^22.10.5",
-                            "@types/qrcode":  "^1.5.6",
-                            "@types/react":  "^19.2.0",
-                            "@types/react-dom":  "^19.2.0",
-                            "@vitejs/plugin-react":  "^5.0.0",
-                            "electron":  "45.2.1",
-                            "electron-builder":  "26.18.0",
-                            "electron-vite":  "6.0.0",
-                            "framer-motion":  "14.9.0",
-                            "react":  "19.3.1",
-                            "react-dom":  "19.3.1",
-                            "typescript":  "^5.9.0",
-                            "vite":  "8.3.5"
-                        }
+{
+  "name": "caldesk",
+  "version": "0.1.0",
+  "description": "A modern, agent-native desktop calendar",
+  "private": true,
+  "main": "./out/main/index.js",
+  "author": "caldesk",
+  "license": "MIT",
+  "bin": {
+    "cal": "bin/cal.mjs",
+    "cal-mcp": "bin/cal-mcp.mjs"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "build:mobile": "vite build --config vite.mobile.config.ts",
+    "sync:android": "npm run build:mobile && cap sync android",
+    "apk": "npm run sync:android && cd android && gradlew assembleDebug",
+    "start": "electron-vite preview",
+    "cal": "node bin/cal.mjs",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "test:rrule": "node scripts/verify-rrule.mjs",
+    "test:calendar": "node scripts/verify-calendar.mjs",
+    "pack": "electron-vite build && electron-builder --dir",
+    "dist": "electron-vite build && electron-builder"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.6.0",
+    "@capacitor/core": "^8.6.0",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "date-fns": "4.4.0",
+    "qrcode": "^1.5.4",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.6.0",
+    "@types/node": "^22.10.5",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "electron": "45.2.1",
+    "electron-builder": "26.18.0",
+    "electron-vite": "6.0.0",
+    "framer-motion": "14.9.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "typescript": "^5.9.0",
+    "vite": "8.3.5"
+  }
 }
