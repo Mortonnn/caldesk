@@ -225,77 +225,128 @@ textarea {
   height: 24px;
 }
 
-/* ------------------------------ 周视图 ------------------------------ */
+/* ------------------------------ 月历网格 ------------------------------ */
 
-.m-week {
+.m-grid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
-  gap: 4px;
-  padding: 10px 10px 6px;
+  gap: 3px;
+  padding: 10px 8px 4px;
 }
 
-.m-week-cell {
-  aspect-ratio: 1 / 1.18;
-  border-radius: 12px;
-  background: var(--m-surface);
+.m-grid-dow {
+  text-align: center;
+  font-size: 11px;
+  color: var(--m-text-3);
+  padding-bottom: 4px;
+  font-weight: 550;
+}
+
+.m-grid-cell {
+  aspect-ratio: 1;
+  border-radius: 11px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding-top: 7px;
-  gap: 3px;
+  justify-content: center;
+  gap: 2px;
+  position: relative;
   transition:
     transform 0.12s,
     background 0.15s;
 }
 
-.m-week-cell:active {
-  transform: scale(0.94);
+.m-grid-cell:active {
+  transform: scale(0.9);
 }
 
-.m-week-cell.m-week-today {
-  background: var(--m-accent-soft);
-}
-
-.m-week-cell.m-week-selected {
-  background: var(--m-accent);
-  color: #fff;
-}
-
-.m-week-dow {
-  font-size: 10.5px;
-  color: var(--m-text-3);
-}
-
-.m-week-cell.m-week-today .m-week-dow {
-  color: var(--m-accent);
-}
-
-.m-week-cell.m-week-selected .m-week-dow {
-  color: rgba(255, 255, 255, 0.8);
-}
-
-.m-week-day {
-  font-size: 16px;
-  font-weight: 600;
+.m-grid-num {
+  font-size: 15px;
+  font-weight: 550;
   font-variant-numeric: tabular-nums;
   line-height: 1.1;
 }
 
-.m-week-dots {
-  display: flex;
-  gap: 2.5px;
-  min-height: 5px;
+.m-grid-out .m-grid-num {
+  color: var(--m-text-3);
+  opacity: 0.55;
 }
 
-.m-week-dot {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
+.m-grid-today .m-grid-num {
+  color: var(--m-accent);
+  font-weight: 700;
+}
+
+.m-grid-today::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 11px;
+  border: 1.5px solid var(--m-accent);
+  opacity: 0.55;
+}
+
+.m-grid-selected {
   background: var(--m-accent);
 }
 
-.m-week-cell.m-week-selected .m-week-dot {
-  background: rgba(255, 255, 255, 0.9);
+.m-grid-selected .m-grid-num {
+  color: #fff;
+  font-weight: 700;
+}
+
+.m-grid-selected::before {
+  opacity: 0;
+}
+
+.m-grid-dots {
+  display: flex;
+  gap: 2px;
+  height: 4px;
+  align-items: center;
+}
+
+.m-grid-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+}
+
+.m-grid-dot-task {
+  background: var(--m-accent);
+}
+
+.m-grid-dot-event {
+  background: #f5a623;
+}
+
+.m-grid-selected .m-grid-dot {
+  background: rgba(255, 255, 255, 0.92);
+}
+
+/* ------------------------------ 顶栏小步进 ------------------------------ */
+
+.m-step {
+  display: flex;
+  gap: 2px;
+}
+
+.m-step-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  color: var(--m-text-3);
+}
+
+.m-step-btn:active {
+  background: var(--m-surface-2);
+}
+
+.m-step-btn svg {
+  width: 17px;
+  height: 17px;
 }
 
 /* ------------------------------ 当天详情 ------------------------------ */
@@ -307,8 +358,8 @@ textarea {
 .m-day-head {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  padding: 10px 2px 12px;
+  gap: 10px;
+  padding: 12px 2px 10px;
 }
 
 .m-day-title {
@@ -316,9 +367,11 @@ textarea {
   font-weight: 650;
 }
 
-.m-day-note {
+.m-day-today {
+  margin-left: auto;
   font-size: 12.5px;
-  color: var(--m-text-2);
+  color: var(--m-accent);
+  font-weight: 550;
 }
 
 .m-section {
@@ -414,6 +467,7 @@ textarea {
 /* 事件卡片 */
 .m-event {
   display: flex;
+  align-items: center;
   gap: 11px;
   padding: 12px 13px;
   background: var(--m-surface);
@@ -424,6 +478,8 @@ textarea {
 .m-event-bar {
   flex: none;
   width: 3px;
+  align-self: stretch;
+  min-height: 26px;
   border-radius: 2px;
   background: var(--m-accent);
 }
@@ -477,10 +533,8 @@ textarea {
   background: var(--m-surface);
   border-radius: var(--m-radius-sm);
   margin-bottom: 6px;
-}
-
-.m-group-item + .m-group-item {
-  margin-top: -1px;
+  width: 100%;
+  text-align: left;
 }
 
 .m-group-main {
@@ -498,6 +552,22 @@ textarea {
 .m-group-sub {
   font-size: 12px;
   color: var(--m-text-3);
+}
+
+.m-group-done {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--m-accent);
+  color: #fff;
+  display: grid;
+  place-items: center;
+}
+
+.m-group-done svg {
+  width: 11px;
+  height: 11px;
 }
 
 /* ------------------------------ 底部弹层 ------------------------------ */

@@ -3,10 +3,10 @@
  *
  * 与桌面端完全分开的一套界面：
  *  - 顶部：月份 + 日历切换
- *  - 中部：一周条 + 当天的任务 / 事件
+ *  - 中部：月历网格 → 点某天看当天详情
  *  - 底部：视图切换 + 悬浮加号
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import type { CalendarEvent, CalendarMeta, DayCell, EventOccurrence } from '@shared/types'
 import { isDoneLine, lineText, splitLines } from '@shared/types'
@@ -19,16 +19,16 @@ import './mobile.css'
 
 const Icon = {
   chevronLeft: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
   ),
   chevronRight: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
   ),
   check: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
   ),
   plus: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
   ),
   trash: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /></svg>
@@ -36,14 +36,14 @@ const Icon = {
   calendar: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="16" rx="3" /><path d="M8 3v4M16 3v4M3 11h18" /></svg>
   ),
-  list: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg>
-  ),
   clock: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
   ),
   settings: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1A1.7 1.7 0 008 19.4a1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H2a2 2 0 110-4h.1A1.7 1.7 0 004.6 8a1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V2a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H22a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z" /></svg>
+  ),
+  close: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
   )
 }
 
@@ -61,6 +61,13 @@ function addDays(iso: string, n: number): string {
   return fromDayNumber(toDayNumber(iso) + n)
 }
 
+/** 把 ISO 日期加 n 个月（保持 1 号） */
+function addMonths(iso: string, n: number): string {
+  const d = new Date(`${iso}T00:00:00`)
+  const t = new Date(d.getFullYear(), d.getMonth() + n, 1)
+  return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-01`
+}
+
 function monthLabel(iso: string): string {
   const d = new Date(`${iso}T00:00:00`)
   return `${d.getFullYear()}年${d.getMonth() + 1}月`
@@ -71,9 +78,25 @@ function dayLabel(iso: string): string {
   return `${d.getMonth() + 1}月${d.getDate()}日 星期${DOW[(d.getDay() + 6) % 7]}`
 }
 
+/** 事件的显示时间：全天只显示日期，有时分显示时分 */
+function eventTime(ev: CalendarEvent): string {
+  if (ev.allDay) return '全天'
+  const s = ev.start
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return '全天'
+  const d = new Date(s)
+  if (Number.isNaN(d.getTime())) return ''
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+function eventKindLabel(ev: CalendarEvent): string {
+  if (ev.kind === 'reminder') return '提醒'
+  if (ev.kind === 'countdown') return '倒数日'
+  return ev.rrule ? '重复任务' : '任务'
+}
+
 /* ------------------------------ 主体 ------------------------------ */
 
-type Tab = 'day' | 'upcoming' | 'settings'
+type Tab = 'month' | 'upcoming' | 'settings'
 
 export default function MobileApp(): React.JSX.Element {
   const [ready, setReady] = useState(false)
@@ -83,11 +106,10 @@ export default function MobileApp(): React.JSX.Element {
   const [date, setDate] = useState(todayISO())
   const [cells, setCells] = useState<Record<string, DayCell>>({})
   const [events, setEvents] = useState<EventOccurrence[]>([])
-  const [tab, setTab] = useState<Tab>('day')
+  const [tab, setTab] = useState<Tab>('month')
   const [toast, setToast] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
   const [draft, setDraft] = useState('')
-  const inputRef = useRef<HTMLInputElement | null>(null)
 
   const say = useCallback((msg: string) => {
     setToast(msg)
@@ -112,31 +134,28 @@ export default function MobileApp(): React.JSX.Element {
     })()
   }, [])
 
-  /* 拉当周/当月的数据 */
-  const loadRange = useCallback(
-    async (cal: string, center: string) => {
-      if (!cal) return
-      const from = addDays(center, -7)
-      const to = addDays(center, 45)
-      const [c, e] = await Promise.all([
-        data.cells.range(cal, from, to),
-        data.events.range(cal, from, to)
-      ])
-      if (c.ok) {
-        const map: Record<string, DayCell> = {}
-        for (const cell of c.data) map[cell.date] = cell
-        setCells(map)
-      }
-      if (e.ok) setEvents(e.data)
-    },
-    []
-  )
+  /* 拉当月的数据 */
+  const loadRange = useCallback(async (cal: string, center: string) => {
+    if (!cal) return
+    const from = addDays(center, -40)
+    const to = addDays(center, 70)
+    const [c, e] = await Promise.all([
+      data.cells.range(cal, from, to),
+      data.events.range(cal, from, to)
+    ])
+    if (c.ok) {
+      const map: Record<string, DayCell> = {}
+      for (const cell of c.data) map[cell.date] = cell
+      setCells(map)
+    }
+    if (e.ok) setEvents(e.data)
+  }, [])
 
   useEffect(() => {
     if (ready && paired && calId) void loadRange(calId, date)
   }, [ready, paired, calId, date, loadRange])
 
-  /* 切前台时刷新一次 */
+  /* 切回前台时刷新一次 */
   useEffect(() => {
     const onFocus = (): void => {
       if (paired && calId) void loadRange(calId, date)
@@ -149,26 +168,34 @@ export default function MobileApp(): React.JSX.Element {
 
   const cell = cells[date]
   const lines = useMemo(() => splitLines(cell?.text ?? ''), [cell?.text])
-  const dayEvents = useMemo(
-    () => events.filter((o) => o.date === date),
-    [events, date]
-  )
+  const dayEvents = useMemo(() => events.filter((o) => o.date === date), [events, date])
 
-  const weekDays = useMemo(() => {
-    // 选中日期所在周（周一起）
-    const n = toDayNumber(date)
-    const back = weekdayOf(n)
-    const start = n - back
-    return Array.from({ length: 7 }, (_, i) => fromDayNumber(start + i))
+  /** 当前月份的网格（6 行 × 7 列，周一起） */
+  const monthGrid = useMemo(() => {
+    const d = new Date(`${date}T00:00:00`)
+    const first = new Date(d.getFullYear(), d.getMonth(), 1)
+    const firstISO = `${first.getFullYear()}-${String(first.getMonth() + 1).padStart(2, '0')}-01`
+    const gridStart = toDayNumber(firstISO) - weekdayOf(toDayNumber(firstISO))
+    return Array.from({ length: 42 }, (_, i) => fromDayNumber(gridStart + i))
   }, [date])
+
+  /** 每天有几条任务 / 几个事件 */
+  const dayCounts = useMemo(() => {
+    const map: Record<string, { tasks: number; events: number }> = {}
+    for (const [d, c] of Object.entries(cells)) {
+      const n = splitLines(c.text).filter((l) => l.trim()).length
+      if (n) map[d] = { ...map[d], tasks: n }
+    }
+    for (const o of events) {
+      map[o.date] = { ...map[o.date], events: (map[o.date]?.events ?? 0) + 1 }
+    }
+    return map
+  }, [cells, events])
 
   const upcoming = useMemo(() => {
     const today = todayISO()
-    const list = events
-      .filter((o) => o.date >= today)
-      .slice(0, 40)
     const byDate = new Map<string, EventOccurrence[]>()
-    for (const o of list) {
+    for (const o of events.filter((x) => x.date >= today).slice(0, 60)) {
       const arr = byDate.get(o.date) ?? []
       arr.push(o)
       byDate.set(o.date, arr)
@@ -183,10 +210,7 @@ export default function MobileApp(): React.JSX.Element {
     const line = lines[index]
     if (line === undefined) return
     const res = await data.cells.setDone(calId, date, index, !isDoneLine(line))
-    if (res.ok) {
-      const map = { ...cells, [date]: res.data }
-      setCells(map)
-    }
+    if (res.ok) setCells({ ...cells, [date]: res.data })
   }
 
   async function removeTask(index: number): Promise<void> {
@@ -209,6 +233,17 @@ export default function MobileApp(): React.JSX.Element {
       say('已添加')
     } else {
       say(res.error)
+    }
+  }
+
+  async function toggleEvent(o: EventOccurrence): Promise<void> {
+    const res = await data.events.setDone(o.event.id, o.date, !o.done)
+    if (res.ok) {
+      setEvents(
+        events.map((x) =>
+          x.event.id === o.event.id && x.date === o.date ? { ...x, done: !x.done } : x
+        )
+      )
     }
   }
 
@@ -236,6 +271,7 @@ export default function MobileApp(): React.JSX.Element {
   }
 
   const cal = calendars.find((c) => c.id === calId)
+  const today = todayISO()
 
   return (
     <div className="m-shell">
@@ -244,23 +280,17 @@ export default function MobileApp(): React.JSX.Element {
         <div className="m-top-title">
           <div className="m-top-month">
             {monthLabel(date)}
-            <button
-              className="m-icon-btn"
-              onClick={() => setDate(addDays(date, -7))}
-              aria-label="上一周"
-            >
-              {Icon.chevronLeft}
-            </button>
-            <button
-              className="m-icon-btn"
-              onClick={() => setDate(addDays(date, 7))}
-              aria-label="下一周"
-            >
-              {Icon.chevronRight}
-            </button>
+            <div className="m-step">
+              <button className="m-step-btn" onClick={() => setDate(addMonths(date, -1))} aria-label="上个月">
+                {Icon.chevronLeft}
+              </button>
+              <button className="m-step-btn" onClick={() => setDate(addMonths(date, 1))} aria-label="下个月">
+                {Icon.chevronRight}
+              </button>
+            </div>
           </div>
           <div className="m-top-sub">
-            {cal ? cal.name : '未选择日历'} · 今天 {dayLabel(todayISO()).split(' ')[0]}
+            {cal ? cal.name : '未选择日历'} · 今天 {dayLabel(today).split(' ')[0]}
           </div>
         </div>
         {calendars.length > 1 && (
@@ -281,32 +311,35 @@ export default function MobileApp(): React.JSX.Element {
 
       {/* 内容 */}
       <div className="m-body">
-        {tab === 'day' && (
+        {tab === 'month' && (
           <>
-            {/* 一周条 */}
-            <div className="m-week">
-              {weekDays.map((d) => {
-                const hasTask = Boolean(cells[d] && splitLines(cells[d].text).some((l) => l.trim()))
-                const hasEvent = events.some((o) => o.date === d)
+            {/* 月历网格 */}
+            <div className="m-grid">
+              {DOW.map((w) => (
+                <div className="m-grid-dow" key={w}>
+                  {w}
+                </div>
+              ))}
+              {monthGrid.map((d) => {
+                const inMonth = d.slice(0, 7) === date.slice(0, 7)
+                const c = dayCounts[d]
                 return (
                   <button
                     key={d}
                     className={[
-                      'm-week-cell',
-                      d === todayISO() ? 'm-week-today' : '',
-                      d === date ? 'm-week-selected' : ''
+                      'm-grid-cell',
+                      inMonth ? '' : 'm-grid-out',
+                      d === today ? 'm-grid-today' : '',
+                      d === date ? 'm-grid-selected' : ''
                     ]
                       .filter(Boolean)
                       .join(' ')}
                     onClick={() => setDate(d)}
                   >
-                    <span className="m-week-dow">
-                      {DOW[weekdayOf(toDayNumber(d))]}
-                    </span>
-                    <span className="m-week-day">{Number(d.slice(8))}</span>
-                    <span className="m-week-dots">
-                      {hasTask && <i className="m-week-dot" />}
-                      {hasEvent && <i className="m-week-dot" />}
+                    <span className="m-grid-num">{Number(d.slice(8))}</span>
+                    <span className="m-grid-dots">
+                      {c?.tasks ? <i className="m-grid-dot m-grid-dot-task" /> : null}
+                      {c?.events ? <i className="m-grid-dot m-grid-dot-event" /> : null}
                     </span>
                   </button>
                 )
@@ -317,6 +350,11 @@ export default function MobileApp(): React.JSX.Element {
             <div className="m-day">
               <div className="m-day-head">
                 <span className="m-day-title">{dayLabel(date)}</span>
+                {date !== today && (
+                  <button className="m-day-today" onClick={() => setDate(today)}>
+                    回到今天
+                  </button>
+                )}
               </div>
 
               <div className="m-section">
@@ -361,20 +399,25 @@ export default function MobileApp(): React.JSX.Element {
                   </div>
                   {dayEvents.map((o) => (
                     <div className="m-event" key={`${o.event.id}-${o.date}`}>
-                      <div
-                        className="m-event-bar"
-                        style={{
-                          background: o.event.color ?? 'var(--m-accent)'
-                        }}
-                      />
+                      <button
+                        className={`m-task-check ${o.done ? 'm-task-check-on' : ''}`}
+                        onClick={() => void toggleEvent(o)}
+                        aria-label={o.done ? '取消完成' : '完成'}
+                      >
+                        {o.done && Icon.check}
+                      </button>
                       <div className="m-event-main">
-                        <div className="m-event-title">{o.event.title}</div>
+                        <div className={`m-event-title ${o.done ? 'm-task-done' : ''}`}>
+                          {o.event.title}
+                        </div>
                         <div className="m-event-meta">
-                          {o.event.kind === 'reminder' && '提醒 · '}
-                          {o.event.kind === 'countdown' && '倒数日 · '}
-                          {o.event.rrule ? '重复' : '单次'}
+                          {eventTime(o.event)} · {eventKindLabel(o.event)}
                         </div>
                       </div>
+                      <div
+                        className="m-event-bar"
+                        style={{ background: o.event.color ?? 'var(--m-accent)' }}
+                      />
                     </div>
                   ))}
                 </div>
@@ -392,26 +435,19 @@ export default function MobileApp(): React.JSX.Element {
                 <div className="m-group" key={d}>
                   <div className="m-group-date">{dayLabel(d)}</div>
                   {list.map((o) => (
-                    <div className="m-group-item" key={`${o.event.id}-${o.date}`}>
+                    <button className="m-group-item" key={`${o.event.id}-${o.date}`} onClick={() => setDate(d)}>
                       <div
                         className="m-event-bar"
-                        style={{
-                          background: o.event.color ?? 'var(--m-accent)',
-                          height: 26
-                        }}
+                        style={{ background: o.event.color ?? 'var(--m-accent)', height: 26 }}
                       />
                       <div className="m-group-main">
                         <div className="m-group-title">{o.event.title}</div>
                         <div className="m-group-sub">
-                          {o.event.kind === 'reminder'
-                            ? '提醒'
-                            : o.event.kind === 'countdown'
-                              ? '倒数日'
-                              : '事件'}
-                          {o.event.rrule ? ' · 重复' : ''}
+                          {eventTime(o.event)} · {eventKindLabel(o.event)}
                         </div>
                       </div>
-                    </div>
+                      {o.done && <span className="m-group-done">{Icon.check}</span>}
+                    </button>
                   ))}
                 </div>
               ))
@@ -440,10 +476,7 @@ export default function MobileApp(): React.JSX.Element {
               <div className="m-group-date">日历</div>
               {calendars.map((c) => (
                 <div className="m-group-item" key={c.id}>
-                  <div
-                    className="m-event-bar"
-                    style={{ background: c.color, height: 26 }}
-                  />
+                  <div className="m-event-bar" style={{ background: c.color, height: 26 }} />
                   <div className="m-group-main">
                     <div className="m-group-title">{c.name}</div>
                   </div>
@@ -457,8 +490,8 @@ export default function MobileApp(): React.JSX.Element {
       {/* 底部导航 */}
       <nav className="m-nav">
         <button
-          className={`m-nav-item ${tab === 'day' ? 'm-nav-active' : ''}`}
-          onClick={() => setTab('day')}
+          className={`m-nav-item ${tab === 'month' ? 'm-nav-active' : ''}`}
+          onClick={() => setTab('month')}
         >
           {Icon.calendar}
           日历
@@ -505,7 +538,6 @@ export default function MobileApp(): React.JSX.Element {
               <div className="m-sheet-handle" />
               <div className="m-sheet-title">添加到 {dayLabel(date).split(' ')[0]}</div>
               <input
-                ref={inputRef}
                 className="m-sheet-input"
                 placeholder="要做什么？"
                 value={draft}
