@@ -1,4 +1,4 @@
-name = "caldesk-sync"
+name = "caldesk"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
 

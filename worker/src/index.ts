@@ -59,6 +59,20 @@ function authorized(req: Request, env: Env): boolean {
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
+    // 线上出异常时 Cloudflare 只给一句 1101，看不到原因；这里兜住并把信息带出来
+    try {
+      return await handle(req, env)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      const stack = err instanceof Error ? (err.stack ?? '').slice(0, 400) : ''
+      console.error('[caldesk] 未捕获异常:', message, stack)
+      return json({ error: 'runtime', message, stack }, 500)
+    }
+  }
+}
+
+async function handle(req: Request, env: Env): Promise<Response> {
+  {
     const url = new URL(req.url)
 
     // 预检必须在鉴权之前处理，否则浏览器拿不到 CORS 头直接判失败
