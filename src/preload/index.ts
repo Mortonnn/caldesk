@@ -105,13 +105,56 @@ const api = {
     clear: () => ipcRenderer.invoke('snapshots:clear') as Promise<number>
   },
   sync: {
-    getConfig: () =>
-      ipcRenderer.invoke('sync:get-config') as Promise<{ url: string; hasToken: boolean }>,
-    setConfig: (url: string, token: string) =>
-      ipcRenderer.invoke('sync:set-config', url, token) as Promise<{
-        url: string
-        hasToken: boolean
+    getState: () =>
+      ipcRenderer.invoke('sync:get-state') as Promise<{
+        serverUrl: string
+        deviceId: string
+        deviceName: string
+        accountId: string
+        paired: boolean
       }>,
+    setServer: (url: string, deviceName: string) =>
+      ipcRenderer.invoke('sync:set-server', url, deviceName) as Promise<{
+        serverUrl: string
+        deviceName: string
+        paired: boolean
+      }>,
+    createAccount: (invite: string, accountName: string) =>
+      ipcRenderer.invoke('sync:create-account', invite, accountName) as Promise<IpcResult<{
+        accountId: string
+      }>>,
+    pairStart: () =>
+      ipcRenderer.invoke('sync:pair-start') as Promise<
+        IpcResult<{ pairId: string; code: string; expiresAt: number; qr: string }>
+      >,
+    pairJoin: (payload: string) =>
+      ipcRenderer.invoke('sync:pair-join', payload) as Promise<
+        IpcResult<{ status: 'pending' | 'approved' | 'rejected' | 'expired' }>
+      >,
+    pairPending: (pairId: string) =>
+      ipcRenderer.invoke('sync:pair-pending', pairId) as Promise<
+        IpcResult<Array<{ deviceId: string; name: string; createdAt: number }>>
+      >,
+    pairApprove: (pairId: string, deviceId: string) =>
+      ipcRenderer.invoke('sync:pair-approve', pairId, deviceId) as Promise<IpcResult<boolean>>,
+    pairReject: (pairId: string, deviceId: string) =>
+      ipcRenderer.invoke('sync:pair-reject', pairId, deviceId) as Promise<IpcResult<boolean>>,
+    devices: () =>
+      ipcRenderer.invoke('sync:devices') as Promise<
+        IpcResult<{
+          devices: Array<{
+            deviceId: string
+            name: string
+            status: string
+            lastSeenAt: number | null
+            lastIp: string | null
+            current: boolean
+          }>
+          online: number
+        }>
+      >,
+    revokeDevice: (deviceId: string) =>
+      ipcRenderer.invoke('sync:revoke-device', deviceId) as Promise<IpcResult<boolean>>,
     run: () =>
       ipcRenderer.invoke('sync:run') as Promise<{
         ok: boolean

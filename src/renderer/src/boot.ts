@@ -18,10 +18,18 @@ export function detectEnv(): BootEnv {
   const injected = Boolean(g.__CALDESK_HTTP__?.url)
   let stored = false
   try {
-    const raw = localStorage.getItem('caldesk.http')
+    // 移动端：身份存在 caldesk.identity 里（配对通过后才有 accountId）
+    const raw = localStorage.getItem('caldesk.identity')
     if (raw) {
-      const parsed = JSON.parse(raw) as { url?: string; token?: string }
-      stored = Boolean(parsed.url && parsed.token)
+      const parsed = JSON.parse(raw) as { accountId?: string; deviceId?: string }
+      stored = Boolean(parsed.accountId && parsed.deviceId)
+    } else {
+      // 桌面端之外的旧配置：单个令牌
+      const old = localStorage.getItem('caldesk.http')
+      if (old) {
+        const parsed = JSON.parse(old) as { url?: string; token?: string }
+        stored = Boolean(parsed.url && parsed.token)
+      }
     }
   } catch {
     stored = false

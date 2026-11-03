@@ -1,15 +1,17 @@
 /**
  * PC 端同步客户端：本地 SQLite ↔ Cloudflare Worker(/D1)
  *
- * 增量策略：
- *  - push：只发 updated_at > 上次推送水位的行
- *  - pull：只拉 updated_at > 上次拉取游标的行，循环直到没有新数据
+ * 安全模型：
+ *  1. 每台设备一套凭据：Authorization: Bearer <deviceId>.<secret>，
+ *     服务端只存 sha256(salt || secret)，比对走常量时间循环；
+ *  2. 新设备必须走配对并被已授权设备批准，才能同步；
+ *  3. 服务端按 account 隔离，推/拉只看得到自己账号的数据。
  *
- * 冲突：两端都是 LWW（updated_at 大者胜），且 SQL 里带 WHERE 守卫，
- * 所以"旧数据覆盖新数据"在服务端和本地都不会发生。
+ * 服务端存明文（用户明确要求简单方便），所以这里没有加解密。
+ *
+ * 增量策略：push 只发 updated_at > 上次推送水位的行；pull 按游标翻页。
+ * 冲突是 LWW（updated_at 大者胜），SQL 里带 WHERE 守卫。
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
 import {
   exportRows,
   getMeta,
@@ -18,14 +20,10 @@ import {
   type SyncPayloadRow,
   type SyncTable
 } from './db'
+import type { StoredIdentity } from './identity'
 
 const TABLES: SyncTable[] = ['calendars', 'day_cells', 'events', 'notes', 'event_done', 'event_skip']
 const PAGE = 200
-
-export interface SyncConfig {
-  url: string
-  token: string
-}
 
 export interface SyncReport {
   ok: boolean
@@ -37,48 +35,36 @@ export interface SyncReport {
   error?: string
 }
 
-export function syncConfigPath(userDataDir: string): string {
-  return join(userDataDir, 'sync.json')
+interface RemoteRow {
+  id: string
+  updatedAt: number
+  deletedAt: number | null
+  payload: string
 }
 
-export function loadSyncConfig(userDataDir: string): SyncConfig | null {
-  try {
-    const p = syncConfigPath(userDataDir)
-    if (!existsSync(p)) return null
-    // 兼容带 BOM 的 UTF-8（Windows 上很多编辑器/命令行默认会写 BOM）
-    const text = readFileSync(p, 'utf-8').replace(/^\uFEFF/, '')
-    const raw = JSON.parse(text) as Partial<SyncConfig>
-    if (!raw.url || !raw.token) return null
-    return { url: raw.url.replace(/\/$/, ''), token: raw.token }
-  } catch {
-    return null
-  }
+function authHeader(id: StoredIdentity): Record<string, string> {
+  return { authorization: `Bearer ${id.deviceId}.${id.deviceSecret}` }
 }
 
-export function saveSyncConfig(userDataDir: string, cfg: SyncConfig): void {
-  const p = syncConfigPath(userDataDir)
-  mkdirSync(dirname(p), { recursive: true })
-  writeFileSync(p, JSON.stringify({ url: cfg.url.replace(/\/$/, ''), token: cfg.token }, null, 2))
-}
-
-async function postJson(url: string, token: string, body: unknown): Promise<unknown> {
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-    body: JSON.stringify(body),
+async function call<T>(
+  id: StoredIdentity,
+  path: string,
+  init: { method?: string; body?: unknown } = {}
+): Promise<T> {
+  const base = id.serverUrl.replace(/\/$/, '')
+  if (!base) throw new Error('还没填服务器地址')
+  const res = await fetch(base + path, {
+    method: init.method ?? 'GET',
+    headers: {
+      ...authHeader(id),
+      ...(init.body ? { 'content-type': 'application/json' } : {})
+    },
+    body: init.body ? JSON.stringify(init.body) : undefined,
     signal: AbortSignal.timeout(20000)
   })
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`)
-  return res.json()
-}
-
-async function getJson(url: string, token: string): Promise<unknown> {
-  const res = await fetch(url, {
-    headers: { authorization: `Bearer ${token}` },
-    signal: AbortSignal.timeout(20000)
-  })
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`)
-  return res.json()
+  if (res.status === 401) throw new Error('设备未授权或已被撤销，请重新配对')
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 160)}`)
+  return (await res.json()) as T
 }
 
 export interface SyncOptions {
@@ -86,7 +72,7 @@ export interface SyncOptions {
   full?: boolean
 }
 
-export async function syncNow(cfg: SyncConfig, options: SyncOptions = {}): Promise<SyncReport> {
+export async function syncNow(id: StoredIdentity, options: SyncOptions = {}): Promise<SyncReport> {
   const full = options.full === true
   const report: SyncReport = {
     ok: false,
@@ -96,47 +82,79 @@ export async function syncNow(cfg: SyncConfig, options: SyncOptions = {}): Promi
     errors: [],
     tables: {}
   }
+  if (!id.accountId) {
+    report.error = '本机还没有加入任何账号'
+    return report
+  }
 
   try {
     for (const table of TABLES) {
       const stat = { pushed: 0, pulled: 0, failed: 0 }
       report.tables[table] = stat
-      console.log(`[caldesk] sync: ${table} 开始`)
 
-      /* ---- 推送本地新增/修改 ---- */
+      /* ---- 推送 ---- */
       const pushCursor = full ? 0 : Number(getMeta(`push:${table}`) ?? 0)
       const pending = exportRows(table, pushCursor)
       if (pending.length > 0) {
-        console.log(`[caldesk] sync: ${table} 推送 ${pending.length} 行`)
-        await postJson(`${cfg.url}/sync/push`, cfg.token, { table, rows: pending })
+        const payload: RemoteRow[] = pending.map((row) => ({
+          id: row.id,
+          updatedAt: row.updatedAt,
+          deletedAt: row.deletedAt,
+          payload: JSON.stringify(row)
+        }))
+        const res = await call<{ written: number; failed: number; errors?: string[] }>(
+          id,
+          '/sync/push',
+          { method: 'POST', body: { table, rows: payload } }
+        )
         const maxUpdated = pending.reduce((m, r) => Math.max(m, r.updatedAt), pushCursor)
         setMeta(`push:${table}`, String(maxUpdated))
-        stat.pushed = pending.length
-        report.pushed += pending.length
+        stat.pushed = res.written ?? payload.length
+        report.pushed += stat.pushed
+        if (res.failed) {
+          stat.failed += res.failed
+          report.failed += res.failed
+          for (const e of res.errors ?? []) {
+            if (report.errors.length < 10) report.errors.push(`${table} ${e}`)
+          }
+        }
       }
 
-      /* ---- 拉取远端新增/修改 ---- */
+      /* ---- 拉取 ---- */
       let cursor = full ? 0 : Number(getMeta(`pull:${table}`) ?? 0)
       let guard = 0
       while (guard < 50) {
         guard += 1
-        const page = (await getJson(
-          `${cfg.url}/sync/pull?table=${table}&since=${cursor}&limit=${PAGE}`,
-          cfg.token
-        )) as { rows: SyncPayloadRow[]; cursor: number }
-
+        const page = await call<{ rows: RemoteRow[]; cursor: number }>(
+          id,
+          `/sync/pull?table=${table}&since=${cursor}&limit=${PAGE}`
+        )
         if (!Array.isArray(page.rows) || page.rows.length === 0) break
-        const imported = importRows(table, page.rows)
-        stat.pulled += imported.written
-        stat.failed += imported.failed
-        report.pulled += imported.written
-        report.failed += imported.failed
-        for (const e of imported.errors) {
-          if (report.errors.length < 10) report.errors.push(`${table} ${e}`)
+
+        const decoded: SyncPayloadRow[] = []
+        for (const row of page.rows) {
+          try {
+            const parsed = JSON.parse(row.payload) as SyncPayloadRow
+            // 服务端给的 id/时间戳优先，避免被 payload 里的旧值覆盖
+            decoded.push({ ...parsed, id: row.id, updatedAt: row.updatedAt, deletedAt: row.deletedAt })
+          } catch {
+            report.failed += 1
+            if (report.errors.length < 10) report.errors.push(`${table} ${row.id}: 内容解析失败`)
+          }
+        }
+        if (decoded.length > 0) {
+          const imported = importRows(table, decoded)
+          stat.pulled += imported.written
+          stat.failed += imported.failed
+          report.pulled += imported.written
+          report.failed += imported.failed
+          for (const e of imported.errors) {
+            if (report.errors.length < 10) report.errors.push(`${table} ${e}`)
+          }
         }
 
         const next = Math.max(cursor, Number(page.cursor ?? 0))
-        if (next === cursor && imported.written === 0) break
+        if (next === cursor && decoded.length === 0) break
         cursor = next
         setMeta(`pull:${table}`, String(cursor))
         if (page.rows.length < PAGE) break
@@ -151,4 +169,93 @@ export async function syncNow(cfg: SyncConfig, options: SyncOptions = {}): Promi
     report.error = (err as Error).message
     return report
   }
+}
+
+/* ------------------------------ 账号与配对 ------------------------------ */
+
+export interface PairStart {
+  pairId: string
+  code: string
+  expiresAt: number
+}
+
+export interface PendingDevice {
+  deviceId: string
+  name: string
+  createdAt: number
+}
+
+/** 已配对的电脑发起一次配对，得到二维码里要放的 pairId / code */
+export async function startPairing(id: StoredIdentity): Promise<PairStart> {
+  return call<PairStart>(id, '/pair/start', { method: 'POST', body: {} })
+}
+
+export async function listPendingDevices(
+  id: StoredIdentity,
+  pairId: string
+): Promise<PendingDevice[]> {
+  const res = await call<{ devices: PendingDevice[] }>(
+    id,
+    `/pair/pending?pairId=${encodeURIComponent(pairId)}`
+  )
+  return res.devices ?? []
+}
+
+export async function approveDevice(
+  id: StoredIdentity,
+  pairId: string,
+  deviceId: string
+): Promise<void> {
+  await call(id, '/pair/approve', { method: 'POST', body: { pairId, deviceId } })
+}
+
+export async function rejectDevice(
+  id: StoredIdentity,
+  pairId: string,
+  deviceId: string
+): Promise<void> {
+  await call(id, '/pair/reject', { method: 'POST', body: { pairId, deviceId } })
+}
+
+export interface DeviceList {
+  devices: Array<{
+    deviceId: string
+    name: string
+    status: string
+    lastSeenAt: number | null
+    lastIp: string | null
+    current: boolean
+  }>
+  online: number
+}
+
+export async function listDevices(id: StoredIdentity): Promise<DeviceList> {
+  return call<DeviceList>(id, '/devices')
+}
+
+export async function revokeDevice(id: StoredIdentity, deviceId: string): Promise<void> {
+  await call(id, '/devices/revoke', { method: 'POST', body: { deviceId } })
+}
+
+/** 首次建账号：本机既是 owner 设备，也是账号的起点 */
+export async function createAccount(
+  id: StoredIdentity,
+  options: { invite: string; accountName: string }
+): Promise<{ accountId: string }> {
+  const base = id.serverUrl.replace(/\/$/, '')
+  if (!base) throw new Error('还没填服务器地址')
+  const res = await fetch(`${base}/account/create`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      invite: options.invite,
+      accountName: options.accountName,
+      deviceId: id.deviceId,
+      accountSecret: id.deviceSecret,
+      deviceName: id.deviceName
+    }),
+    signal: AbortSignal.timeout(20000)
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 160)}`)
+  return (await res.json()) as { accountId: string }
 }

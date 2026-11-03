@@ -32,7 +32,18 @@ import {
 } from './db'
 import type { EventInput, NoteInput } from '@shared/types'
 import { startApiServer, type ApiHandle } from './api'
-import { loadSyncConfig, saveSyncConfig, syncNow } from './sync'
+import {
+  approveDevice,
+  createAccount,
+  listDevices,
+  listPendingDevices,
+  rejectDevice,
+  revokeDevice,
+  startPairing,
+  syncNow
+} from './sync'
+import { ensureIdentity, isPaired, saveIdentity, type StoredIdentity } from './identity'
+import { pairingQrText, parsePairingQr } from '@shared/identity'
 import { migrateFromOldApp } from './migrate'
 
 /* --------------------------- 命令行开关 --------------------------- */
@@ -588,22 +599,154 @@ ipcMain.handle('snapshots:list', () => listSnapshots())
 handle('snapshots:restore', (id: string) => restoreSnapshot(id))
 ipcMain.handle('snapshots:clear', () => clearSnapshots())
 
-/* 同步 */
-handle('sync:get-config', () => {
-  const cfg = loadSyncConfig(app.getPath('userData'))
-  return { url: cfg?.url ?? '', hasToken: Boolean(cfg?.token) }
+/* 同步：设备身份 + 配对 + 端到端加密 */
+function identityOf(): StoredIdentity {
+  return ensureIdentity(app.getPath('userData'))
+}
+
+handle('sync:get-state', () => {
+  const id = identityOf()
+  return {
+    serverUrl: id.serverUrl,
+    deviceId: id.deviceId,
+    deviceName: id.deviceName,
+    accountId: id.accountId,
+    paired: isPaired(id)
+  }
 })
-handle('sync:set-config', (url: string, token: string) => {
-  const existing = loadSyncConfig(app.getPath('userData'))
-  // 令牌留空表示「不修改」，避免用户只改地址时把令牌清掉
-  const finalToken = token && token.trim() ? token.trim() : (existing?.token ?? '')
-  saveSyncConfig(app.getPath('userData'), { url: url.trim(), token: finalToken })
-  return { url: url.trim(), hasToken: Boolean(finalToken) }
+
+handle('sync:set-server', (url: string, deviceName: string) => {
+  const id = ensureIdentity(app.getPath('userData'), {
+    serverUrl: url.trim().replace(/\/$/, ''),
+    deviceName: deviceName.trim() || undefined
+  })
+  return { serverUrl: id.serverUrl, deviceName: id.deviceName, paired: isPaired(id) }
 })
+
+/** 首次建账号：这台电脑就是账号的第一个设备 */
+ipcMain.handle('sync:create-account', async (_e, invite: string, accountName: string) => {
+  try {
+    const id = identityOf()
+    if (!id.serverUrl) return { ok: false, error: '先填服务器地址' }
+    const { accountId } = await createAccount(id, {
+      invite: invite.trim(),
+      accountName: accountName.trim()
+    })
+    const saved: StoredIdentity = { ...id, accountId }
+    saveIdentity(app.getPath('userData'), saved)
+    broadcastDataChanged()
+    return { ok: true, data: { accountId } }
+  } catch (err) {
+    return { ok: false, error: (err as Error).message }
+  }
+})
+
+/** 二维码里的内容：地址 + 配对信息（配对码 + pairId） */
+ipcMain.handle('sync:pair-start', async () => {
+  try {
+    const id = identityOf()
+    if (!isPaired(id)) return { ok: false, error: '本机还没有账号，先创建' }
+    const started = await startPairing(id)
+    return {
+      ok: true,
+      data: {
+        ...started,
+        qr: pairingQrText({
+          v: 1,
+          u: id.serverUrl,
+          p: started.pairId,
+          c: started.code
+        })
+      }
+    }
+  } catch (err) {
+    return { ok: false, error: (err as Error).message }
+  }
+})
+
+/**
+ * 新设备扫码后加入：提交自己的身份，等已授权设备批准。
+ * 桌面端也能用这个通道（比如给第二台电脑配对）。
+ */
+ipcMain.handle('sync:pair-join', async (_e, payloadText: string) => {
+  try {
+    const parsed = parsePairingQr(payloadText)
+    if (!parsed) return { ok: false, error: '二维码内容不对' }
+    const base = parsed.u.replace(/\/$/, '')
+    const id = ensureIdentity(app.getPath('userData'), { serverUrl: base })
+    const res = await fetch(`${base}/pair/join`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        pairId: parsed.p,
+        code: parsed.c,
+        deviceId: id.deviceId,
+        accountSecret: id.deviceSecret,
+        deviceName: id.deviceName
+      }),
+      signal: AbortSignal.timeout(20000)
+    })
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}: ${(await res.text()).slice(0, 160)}` }
+    const st = await fetch(
+      `${base}/pair/status?pairId=${encodeURIComponent(parsed.p)}` +
+        `&deviceId=${encodeURIComponent(id.deviceId)}&code=${encodeURIComponent(parsed.c)}`
+    )
+    const status = ((await st.json()) as { status?: string }).status ?? 'pending'
+    return { ok: true, data: { status } }
+  } catch (err) {
+    return { ok: false, error: (err as Error).message }
+  }
+})
+
+ipcMain.handle('sync:pair-pending', async (_e, pairId: string) => {
+  try {
+    const list = await listPendingDevices(identityOf(), pairId)
+    return { ok: true, data: list }
+  } catch (err) {
+    return { ok: false, error: (err as Error).message }
+  }
+})
+
+ipcMain.handle('sync:pair-approve', async (_e, pairId: string, deviceId: string) => {
+  try {
+    await approveDevice(identityOf(), pairId, deviceId)
+    return { ok: true, data: true }
+  } catch (err) {
+    return { ok: false, error: (err as Error).message }
+  }
+})
+
+ipcMain.handle('sync:pair-reject', async (_e, pairId: string, deviceId: string) => {
+  try {
+    await rejectDevice(identityOf(), pairId, deviceId)
+    return { ok: true, data: true }
+  } catch (err) {
+    return { ok: false, error: (err as Error).message }
+  }
+})
+
+ipcMain.handle('sync:devices', async () => {
+  try {
+    const list = await listDevices(identityOf())
+    return { ok: true, data: list }
+  } catch (err) {
+    return { ok: false, error: (err as Error).message }
+  }
+})
+
+ipcMain.handle('sync:revoke-device', async (_e, deviceId: string) => {
+  try {
+    await revokeDevice(identityOf(), deviceId)
+    return { ok: true, data: true }
+  } catch (err) {
+    return { ok: false, error: (err as Error).message }
+  }
+})
+
 ipcMain.handle('sync:run', async () => {
-  const cfg = loadSyncConfig(app.getPath('userData'))
-  if (!cfg) return { ok: false, pushed: 0, pulled: 0, tables: {}, error: '尚未配置同步地址或令牌' }
-  const report = await syncNow(cfg)
+  const id = identityOf()
+  if (!isPaired(id)) return { ok: false, pushed: 0, pulled: 0, failed: 0, tables: {}, errors: [], error: '本机还没有加入账号' }
+  const report = await syncNow(id)
   // 拉下来的数据要立刻进界面，不能等用户翻月
   if (report.ok && report.pulled > 0) broadcastDataChanged()
   mainWindow?.webContents.send('sync:done', report)
@@ -706,16 +849,14 @@ app.whenReady().then(async () => {
   // 无界面同步一次（用于自动化验证或计划任务）
   if (process.argv.includes('--sync-once')) {
     console.log('[caldesk] sync-once: 开始')
-    const fileCfg = loadSyncConfig(app.getPath('userData'))
-    const url = argValue('--sync-url') ?? fileCfg?.url
-    const token = argValue('--sync-token') ?? fileCfg?.token
-    if (!url || !token) {
-      console.error('[caldesk] 缺少同步配置（--sync-url / --sync-token 或 sync.json）')
+    const id = ensureIdentity(app.getPath('userData'))
+    if (!isPaired(id)) {
+      console.error('[caldesk] 本机还没有加入账号（identity.json 缺失或未配对）')
       app.exit(2)
       return
     }
     try {
-      const report = await syncNow({ url, token })
+      const report = await syncNow(id)
       console.log('[caldesk] sync-once ->', JSON.stringify(report))
       app.exit(report.ok ? 0 : 1)
     } catch (err) {
@@ -750,11 +891,11 @@ app.whenReady().then(async () => {
 
   if (state.miniVisible || shotMiniPath) createMiniWindow()
 
-  // 自动同步：启动后跑一次，之后每 5 分钟一次（仅在配置了同步时）
+  // 自动同步：启动后跑一次，之后每 5 分钟一次（仅在已配对时）
   const autoSync = (): void => {
-    const cfg = loadSyncConfig(app.getPath('userData'))
-    if (!cfg) return
-    void syncNow(cfg)
+    const id = ensureIdentity(app.getPath('userData'))
+    if (!isPaired(id)) return
+    void syncNow(id)
       .then((report) => {
         console.log(
           `[caldesk] auto-sync: push=${report.pushed} pull=${report.pulled} fail=${report.failed}` +
@@ -772,9 +913,9 @@ app.whenReady().then(async () => {
   // 本地 MCP / CLI 服务：随机回环端口，供 agent 与命令行访问
   void startApiServer(app.getPath('userData'), {
     runSync: async (options: { full?: boolean }) => {
-      const cfg = loadSyncConfig(app.getPath('userData'))
-      if (!cfg) return { ok: false, error: '尚未配置同步地址或令牌' }
-      return syncNow(cfg, options)
+      const id = ensureIdentity(app.getPath('userData'))
+      if (!isPaired(id)) return { ok: false, error: '本机还没有加入账号' }
+      return syncNow(id, options)
     },
     runMigrate: async ({
       from,

@@ -18,13 +18,60 @@ import type {
   SearchHit,
   SnapshotMeta
 } from '@shared/types'
+import {
+  ensureMobileIdentity,
+  isMobilePaired,
+  loadMobileIdentity,
+  parsePairText,
+  randomHex,
+  randomUuid,
+  saveMobileIdentity,
+  type MobileIdentity
+} from './mobileIdentity'
 
 type HostApi = Window['caldesk']
 type IpcResult<T> = { ok: true; data: T } | { ok: false; error: string }
 
 export interface HttpConfig {
   url: string
-  token: string
+  /** 兼容旧配置：现在用设备凭据代替单一令牌 */
+  token?: string
+  deviceId?: string
+  deviceSecret?: string
+}
+
+/** 配对相关的数据形状（桌面端与移动端一致） */
+export interface PairStartResult {
+  pairId: string
+  code: string
+  expiresAt: number
+  qr: string
+}
+
+export interface PendingDeviceInfo {
+  deviceId: string
+  name: string
+  createdAt: number
+}
+
+export interface DeviceListResult {
+  devices: Array<{
+    deviceId: string
+    name: string
+    status: string
+    lastSeenAt: number | null
+    lastIp: string | null
+    current: boolean
+  }>
+  online: number
+}
+
+export interface SyncStateResult {
+  serverUrl: string
+  deviceId: string
+  deviceName: string
+  accountId: string
+  paired: boolean
 }
 
 const HOST_KEY = 'caldesk.http'
@@ -34,16 +81,34 @@ const HOST_KEY = 'caldesk.http'
 export function createHttpHost(cfg: HttpConfig): HostApi {
   const base = cfg.url.replace(/\/$/, '')
 
+  /* 移动端也走「设备凭据」：localStorage 里存 identity.json 的等价物 */
+  const mobile: MobileIdentity = ensureMobileIdentity({
+    serverUrl: base,
+    deviceName: cfg.deviceId ? '这台手机' : undefined
+  })
+  if (cfg.deviceId && cfg.deviceSecret) {
+    mobile.deviceId = cfg.deviceId
+    mobile.deviceSecret = cfg.deviceSecret
+    saveMobileIdentity(mobile)
+  }
+  if (cfg.token && !mobile.deviceSecret) {
+    // 旧版配置：只有一个全局令牌，凑一个设备身份出来（不严谨但兼容）
+    mobile.deviceSecret = cfg.token
+    mobile.deviceId = cfg.deviceId ?? randomUuid()
+    saveMobileIdentity(mobile)
+  }
+
   async function req<T>(path: string, init?: RequestInit): Promise<IpcResult<T>> {
     try {
       const res = await fetch(base + path, {
         ...init,
         headers: {
-          authorization: `Bearer ${cfg.token}`,
+          authorization: `Bearer ${mobile.deviceId}.${mobile.deviceSecret}`,
           'content-type': 'application/json',
           ...(init?.headers ?? {})
         }
       })
+      if (res.status === 401) return { ok: false, error: '设备未授权或已被撤销，请重新配对' }
       if (!res.ok) {
         const text = await res.text()
         return { ok: false, error: `${res.status}：${text.slice(0, 160)}` }
@@ -238,16 +303,95 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
     },
 
     sync: {
-      getConfig: () => Promise.resolve({ url: cfg.url, hasToken: Boolean(cfg.token) }),
-      setConfig: (url: string, token: string) => {
-        localStorage.setItem(HOST_KEY, JSON.stringify({ url, token }))
-        return Promise.resolve({ url, hasToken: Boolean(token) })
+      getState: async (): Promise<SyncStateResult> => {
+        const id = loadMobileIdentity()
+        return {
+          serverUrl: id?.serverUrl ?? base,
+          deviceId: id?.deviceId ?? '',
+          deviceName: id?.deviceName ?? '这台手机',
+          accountId: id?.accountId ?? '',
+          paired: isMobilePaired(id)
+        }
       },
+      setServer: async (url: string, deviceName: string): Promise<SyncStateResult> => {
+        const id = ensureMobileIdentity({ serverUrl: url.trim(), deviceName })
+        return {
+          serverUrl: id.serverUrl,
+          deviceId: id.deviceId,
+          deviceName: id.deviceName,
+          accountId: id.accountId,
+          paired: isMobilePaired(id)
+        }
+      },
+      createAccount: async (invite: string, accountName: string) => {
+        try {
+          const res = await fetch(`${base}/account/create`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              invite,
+              accountName,
+              deviceId: mobile.deviceId,
+              accountSecret: mobile.deviceSecret,
+              deviceName: mobile.deviceName
+            })
+          })
+          if (!res.ok) return { ok: false as const, error: `${res.status}：${(await res.text()).slice(0, 160)}` }
+          const { accountId } = (await res.json()) as { accountId: string }
+          mobile.accountId = accountId
+          saveMobileIdentity(mobile)
+          return { ok: true as const, data: { accountId } }
+        } catch (err) {
+          return { ok: false as const, error: (err as Error).message }
+        }
+      },
+      pairStart: async () => {
+        // 移动端是「加入方」，由电脑出码；这里返回未实现提示
+        return { ok: false as const, error: '移动端请扫描电脑上的配对二维码' }
+      },
+      pairJoin: async (payloadText: string) => {
+        try {
+          const parsed = parsePairText(payloadText)
+          if (!parsed) return { ok: false as const, error: '二维码内容不对' }
+          mobile.serverUrl = parsed.u
+          saveMobileIdentity(mobile)
+          const res = await fetch(`${parsed.u}/pair/join`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              // 手动输码时 pairId 为空，服务端按 code 找配对
+              pairId: parsed.p,
+              code: parsed.c,
+              deviceId: mobile.deviceId,
+              accountSecret: mobile.deviceSecret,
+              deviceName: mobile.deviceName
+            })
+          })
+          if (!res.ok) return { ok: false as const, error: `${res.status}：${(await res.text()).slice(0, 160)}` }
+          const st = await fetch(
+            `${parsed.u}/pair/status?pairId=${encodeURIComponent(parsed.p)}&deviceId=${encodeURIComponent(mobile.deviceId)}&code=${encodeURIComponent(parsed.c)}`
+          )
+          const status = ((await st.json()) as { status?: string }).status ?? 'pending'
+          return {
+            ok: true as const,
+            data: { status: status as 'pending' | 'approved' | 'rejected' | 'expired' }
+          }
+        } catch (err) {
+          return { ok: false as const, error: (err as Error).message }
+        }
+      },
+      pairPending: async () => ({ ok: false as const, error: '移动端不需要审批' }),
+      pairApprove: async () => ({ ok: false as const, error: '移动端不需要审批' }),
+      pairReject: async () => ({ ok: false as const, error: '移动端不需要审批' }),
+      devices: async (): Promise<IpcResult<DeviceListResult>> => {
+        const res = await req<DeviceListResult>('/devices')
+        return res
+      },
+      revokeDevice: async () => ({ ok: false as const, error: '请在电脑上撤销设备' }),
       run: () =>
-        Promise.resolve({ ok: true, pushed: 0, pulled: 0, failed: 0 }).then((r) => ({
-          ...r,
-          error: undefined
-        })) as Promise<{ ok: boolean; pushed: number; pulled: number; failed: number }>,
+        Promise.resolve({ ok: true, pushed: 0, pulled: 0, failed: 0, errors: [], tables: {} }).then(
+          (r) => ({ ...r, error: undefined })
+        ) as Promise<{ ok: boolean; pushed: number; pulled: number; failed: number }>,
       onDone: () => () => {}
     },
 
@@ -326,8 +470,30 @@ function createStub(): HostApi {
       clear: () => Promise.resolve(0)
     },
     sync: {
-      getConfig: () => Promise.resolve({ url: '', hasToken: false }),
-      setConfig: () => Promise.resolve({ url: '', hasToken: false }),
+      getState: () =>
+        Promise.resolve({
+          serverUrl: '',
+          deviceId: '',
+          deviceName: '这台设备',
+          accountId: '',
+          paired: false
+        }),
+      setServer: () =>
+        Promise.resolve({
+          serverUrl: '',
+          deviceId: '',
+          deviceName: '这台设备',
+          accountId: '',
+          paired: false
+        }),
+      createAccount: () => rejected<{ accountId: string }>('创建账号'),
+      pairStart: () => rejected<PairStartResult>('配对'),
+      pairJoin: () => rejected<{ status: string }>('配对'),
+      pairPending: () => rejected<PendingDeviceInfo[]>('待批准设备'),
+      pairApprove: () => rejected<boolean>('批准设备'),
+      pairReject: () => rejected<boolean>('拒绝设备'),
+      devices: () => rejected<DeviceListResult>('设备列表'),
+      revokeDevice: () => rejected<boolean>('撤销设备'),
       run: () => Promise.resolve({ ok: false, pushed: 0, pulled: 0, failed: 0, error: '未接入同步' }),
       onDone: () => () => {}
     },

@@ -1207,6 +1207,77 @@ button {
   border-top: 1px solid var(--stroke);
 }
 
+/* ---------- 同步 / 配对 ---------- */
+
+.sync-create,
+.sync-paired {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.pair-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+  background: var(--bg-soft);
+}
+
+.pair-qr {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.pair-qr svg,
+.qr-svg svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.qr-placeholder {
+  border-radius: 8px;
+  background: repeating-linear-gradient(45deg, #e5e7eb, #e5e7eb 6px, #f8fafc 6px, #f8fafc 12px);
+}
+
+.pair-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.pair-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--bg-soft);
+}
+
+.pair-row .snap-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sync-paired code {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+}
+
 .set-head {
   display: flex;
   align-items: baseline;
@@ -1415,6 +1486,54 @@ button {
   margin-top: 4px;
   font-size: 10.5px;
   color: var(--text-faint);
+}
+
+.setup-divider {
+  margin: 14px 0 6px;
+  font-size: 11px;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+/* ---------- 手机端扫码 ---------- */
+
+.scanner {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.scanner-video {
+  width: 100%;
+  max-height: 320px;
+  border-radius: 12px;
+  background: #000;
+  object-fit: cover;
+}
+
+.scanner-frame {
+  position: absolute;
+  top: 16%;
+  left: 50%;
+  width: 62%;
+  aspect-ratio: 1;
+  transform: translateX(-50%);
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  border-radius: 12px;
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.scanner-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.scanner-cancel {
+  margin-top: 4px;
 }
 
 ::-webkit-scrollbar {

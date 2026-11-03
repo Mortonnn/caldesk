@@ -356,16 +356,29 @@ async function joinPairing(req: Request, env: Env): Promise<Response> {
   const deviceId = str(body.deviceId).trim()
   const accountSecret = str(body.accountSecret).trim()
   const deviceName = str(body.deviceName).trim()
-  if (!pairId || !code || !deviceId) return fail(400, 'missing_fields', '缺少 pairId/code/deviceId')
+  if (!code || !deviceId) return fail(400, 'missing_fields', '缺少 code/deviceId')
   if (!isHex(accountSecret, SECRET_HEX_LEN)) {
     return fail(400, 'invalid_secret', `accountSecret 必须是 ${SECRET_HEX_LEN} 位 hex`)
   }
 
-  const pairing = await firstRow<PairingRecord>(
-    env,
-    'SELECT id, account_id, code, expires_at, status FROM pairings WHERE id = ?',
-    pairId
-  )
+  // pairId 可以不给（手动输配对码的场景）：按 code 找那一条未过期的配对
+  let pairing: PairingRecord | null = null
+  if (pairId) {
+    pairing = await firstRow<PairingRecord>(
+      env,
+      'SELECT id, account_id, code, expires_at, status FROM pairings WHERE id = ?',
+      pairId
+    )
+  } else {
+    pairing = await firstRow<PairingRecord>(
+      env,
+      `SELECT id, account_id, code, expires_at, status FROM pairings
+        WHERE code = ? AND status = 'open' AND expires_at > ?
+        ORDER BY expires_at DESC LIMIT 1`,
+      code,
+      Date.now()
+    )
+  }
   if (!pairing || pairing.status !== 'open') return fail(404, 'pairing_unavailable', '配对不存在或已失效')
   if (pairing.expires_at <= Date.now()) return fail(410, 'pairing_expired', '配对码已过期')
   if (!timingSafeEqual(code, pairing.code)) return fail(403, 'invalid_code', '配对码不正确')
@@ -415,13 +428,24 @@ async function pairingStatus(url: URL, env: Env): Promise<Response> {
   const code = url.searchParams.get('code') ?? ''
 
   const unknown = json({ status: 'unknown' })
-  if (!pairId || !deviceId || !code) return unknown
+  if (!deviceId || !code) return unknown
 
-  const pairing = await firstRow<PairingRecord>(
-    env,
-    'SELECT id, account_id, code, expires_at, status FROM pairings WHERE id = ?',
-    pairId
-  )
+  // pairId 同样可以不给：按 code 找那条配对
+  let pairing: PairingRecord | null = null
+  if (pairId) {
+    pairing = await firstRow<PairingRecord>(
+      env,
+      'SELECT id, account_id, code, expires_at, status FROM pairings WHERE id = ?',
+      pairId
+    )
+  } else {
+    pairing = await firstRow<PairingRecord>(
+      env,
+      `SELECT id, account_id, code, expires_at, status FROM pairings
+        WHERE code = ? ORDER BY expires_at DESC LIMIT 1`,
+      code
+    )
+  }
   if (!pairing) return unknown
   if (!timingSafeEqual(code, pairing.code)) return unknown
 

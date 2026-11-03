@@ -26,6 +26,7 @@ import type {
 import { isDoneLine, lineText, splitLines } from '@shared/types'
 import { describeRrule, toDayNumber, weekdayOf } from '@shared/rrule'
 import { data } from './data'
+import { QrCode } from './QrCode'
 
 const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日']
 
@@ -140,7 +141,26 @@ export default function App(): React.JSX.Element {
   const [results, setResults] = useState<SearchHit[]>([])
   const [panelError, setPanelError] = useState<string | null>(null)
   const [syncUrl, setSyncUrl] = useState('')
-  const [syncToken, setSyncToken] = useState('')
+  const [syncDeviceName, setSyncDeviceName] = useState('这台电脑')
+  const [syncAccountId, setSyncAccountId] = useState('')
+  const [syncPaired, setSyncPaired] = useState(false)
+  const [syncInvite, setSyncInvite] = useState('')
+  const [syncAccountName, setSyncAccountName] = useState('')
+  const [pairInfo, setPairInfo] = useState<{ pairId: string; code: string; qr: string } | null>(null)
+  const [pairPending, setPairPending] = useState<
+    Array<{ deviceId: string; name: string; createdAt: number }>
+  >([])
+  const [deviceList, setDeviceList] = useState<
+    Array<{
+      deviceId: string
+      name: string
+      status: string
+      lastSeenAt: number | null
+      lastIp: string | null
+      current: boolean
+    }>
+  >([])
+  const [syncOnline, setSyncOnline] = useState(0)
   const [syncMsg, setSyncMsg] = useState<string | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [customDays, setCustomDays] = useState(2)
@@ -188,7 +208,12 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     void data.settings.get().then((s) => setMiniVisible(s.miniVisible))
     void getThemeMode().then(setTheme)
-    void data.sync.getConfig().then((c) => setSyncUrl(c.url))
+    void data.sync.getState().then((s) => {
+      setSyncUrl(s.serverUrl)
+      setSyncDeviceName(s.deviceName)
+      setSyncAccountId(s.accountId)
+      setSyncPaired(s.paired)
+    })
     const offSync = data.sync.onDone((r) => {
       setSyncMsg(r.ok ? `同步完成：上传 ${r.pushed}，下载 ${r.pulled}` : '同步失败')
     })
@@ -203,10 +228,90 @@ export default function App(): React.JSX.Element {
     return offSync
   }, [])
 
-  async function saveSyncConfig(): Promise<void> {
-    const res = await data.sync.setConfig(syncUrl.trim(), syncToken.trim())
-    setSyncToken('')
-    setSyncMsg(res.hasToken ? '同步配置已保存' : '还需要填写同步令牌')
+  /** 保存服务器地址与本机设备名 */
+  async function saveSyncServer(): Promise<void> {
+    const res = await data.sync.setServer(syncUrl.trim(), syncDeviceName.trim())
+    setSyncUrl(res.serverUrl)
+    setSyncDeviceName(res.deviceName)
+    setSyncPaired(res.paired)
+    setSyncMsg('已保存')
+  }
+
+  /** 首次使用：创建账号，这台电脑就是第一个设备 */
+  async function createSyncAccount(): Promise<void> {
+    setSyncMsg('正在创建账号…')
+    const res = await data.sync.createAccount(syncInvite.trim(), syncAccountName.trim())
+    if (!res.ok) {
+      setSyncMsg(`创建失败：${res.error}`)
+      return
+    }
+    setSyncAccountId(res.data.accountId)
+    setSyncPaired(true)
+    setSyncMsg('账号已创建，接下来可以给手机扫码配对')
+    void refreshDevices()
+  }
+
+  /** 生成配对二维码，手机扫这个 */
+  async function startPair(): Promise<void> {
+    setSyncMsg('正在生成配对码…')
+    const res = await data.sync.pairStart()
+    if (!res.ok) {
+      setSyncMsg(`无法配对：${res.error}`)
+      return
+    }
+    setPairInfo({ pairId: res.data.pairId, code: res.data.code, qr: res.data.qr })
+    setPairPending([])
+    setSyncMsg('把二维码给手机扫，或手动输入配对码')
+  }
+
+  /** 轮询待批准的设备 */
+  useEffect(() => {
+    if (!pairInfo) return
+    let stop = false
+    const tick = async (): Promise<void> => {
+      const res = await data.sync.pairPending(pairInfo.pairId)
+      if (stop) return
+      if (res.ok) setPairPending(res.data)
+    }
+    void tick()
+    const timer = setInterval(() => void tick(), 2000)
+    return () => {
+      stop = true
+      clearInterval(timer)
+    }
+  }, [pairInfo])
+
+  /** 设备列表 + 在线数 */
+  async function refreshDevices(): Promise<void> {
+    const res = await data.sync.devices()
+    if (res.ok) {
+      setDeviceList(res.data.devices)
+      setSyncOnline(res.data.online)
+    }
+  }
+
+  useEffect(() => {
+    if (syncPaired) void refreshDevices()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [syncPaired])
+
+  async function approvePair(deviceId: string): Promise<void> {
+    if (!pairInfo) return
+    const res = await data.sync.pairApprove(pairInfo.pairId, deviceId)
+    setSyncMsg(res.ok ? '已批准，可以同步了' : `批准失败：${res.error}`)
+    if (res.ok) void refreshDevices()
+  }
+
+  async function rejectPair(deviceId: string): Promise<void> {
+    if (!pairInfo) return
+    const res = await data.sync.pairReject(pairInfo.pairId, deviceId)
+    if (res.ok) setPairPending((prev) => prev.filter((d) => d.deviceId !== deviceId))
+  }
+
+  async function revokeDevice(deviceId: string): Promise<void> {
+    const res = await data.sync.revokeDevice(deviceId)
+    setSyncMsg(res.ok ? '已撤销该设备' : `撤销失败：${res.error}`)
+    void refreshDevices()
   }
 
   async function runSyncNow(): Promise<void> {
@@ -1136,29 +1241,116 @@ export default function App(): React.JSX.Element {
                     <span className="pop-label">同步（Cloudflare）</span>
                     <input
                       className="task-input"
-                      placeholder="Worker 地址，如 https://caldesk-sync.xxx.workers.dev"
+                      placeholder="服务器地址，如 https://caldesk.ilikeu.cc.cd"
                       value={syncUrl}
                       onChange={(e) => setSyncUrl(e.target.value)}
                     />
                     <input
                       className="task-input"
-                      type="password"
-                      placeholder="同步令牌（留空表示不修改）"
-                      value={syncToken}
-                      onChange={(e) => setSyncToken(e.target.value)}
+                      placeholder="这台设备的名字"
+                      value={syncDeviceName}
+                      onChange={(e) => setSyncDeviceName(e.target.value)}
                     />
                     <div className="note-actions">
-                      <button className="ghost" onClick={() => void saveSyncConfig()}>
+                      <button className="ghost" onClick={() => void saveSyncServer()}>
                         保存
                       </button>
                       <button
                         className="primary-btn"
-                        disabled={syncing}
+                        disabled={syncing || !syncPaired}
                         onClick={() => void runSyncNow()}
                       >
                         {syncing ? '同步中…' : '立即同步'}
                       </button>
                     </div>
+
+                    {!syncPaired ? (
+                      <div className="sync-create">
+                        <p className="pop-desc">
+                          第一次用要先建一个账号，这台电脑就是账号的第一个设备。
+                        </p>
+                        <input
+                          className="task-input"
+                          placeholder="账号名称"
+                          value={syncAccountName}
+                          onChange={(e) => setSyncAccountName(e.target.value)}
+                        />
+                        <input
+                          className="task-input"
+                          placeholder="邀请码（服务器设置了才需要）"
+                          value={syncInvite}
+                          onChange={(e) => setSyncInvite(e.target.value)}
+                        />
+                        <button
+                          className="primary-btn"
+                          disabled={!syncUrl.trim()}
+                          onClick={() => void createSyncAccount()}
+                        >
+                          创建账号
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="sync-paired">
+                        <p className="pop-desc">
+                          账号 <code>{syncAccountId.slice(0, 8)}…</code>
+                          {syncOnline > 0 && ` · 当前在线 ${syncOnline} 台设备`}
+                        </p>
+                        <button className="ghost" onClick={() => void startPair()}>
+                          手机配对（生成二维码）
+                        </button>
+
+                        {pairInfo && (
+                          <div className="pair-box">
+                            <div className="pair-qr">
+                              <QrCode text={pairInfo.qr} size={176} />
+                            </div>
+                            <p className="pop-desc">
+                              配对码 <strong>{pairInfo.code}</strong>
+                              <br />
+                              手机扫上面的码，或手动输入这个配对码。
+                            </p>
+                            {pairPending.length > 0 ? (
+                              <div className="pair-list">
+                                <p className="pop-desc">等批准：</p>
+                                {pairPending.map((d) => (
+                                  <div key={d.deviceId} className="pair-row">
+                                    <span className="snap-label">{d.name || d.deviceId.slice(0, 8)}</span>
+                                    <button className="ghost" onClick={() => void approvePair(d.deviceId)}>
+                                      批准
+                                    </button>
+                                    <button className="ghost" onClick={() => void rejectPair(d.deviceId)}>
+                                      拒绝
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="pop-desc">还没有待批准的设备</p>
+                            )}
+                          </div>
+                        )}
+
+                        {deviceList.length > 0 && (
+                          <div className="pair-list">
+                            <p className="pop-desc">已配对设备：</p>
+                            {deviceList.map((d) => (
+                              <div key={d.deviceId} className="pair-row">
+                                <span className="snap-label">
+                                  {d.name || d.deviceId.slice(0, 8)}
+                                  {d.current ? '（本机）' : ''}
+                                  {d.status !== 'approved' ? `（${d.status}）` : ''}
+                                </span>
+                                {!d.current && (
+                                  <button className="ghost" onClick={() => void revokeDevice(d.deviceId)}>
+                                    撤销
+                                  </button>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                     {syncMsg && <span className="hint">{syncMsg}</span>}
                   </section>
 
