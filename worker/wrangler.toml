@@ -2,12 +2,15 @@ name = "caldesk-sync"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
 
+# 部署：Cloudflare Workers Builds 直接从 GitHub 拉本仓库，根目录设为 worker/，
+# 构建命令 `npm ci`，部署命令 `npx wrangler deploy`。推代码即部署。
 [[d1_databases]]
 binding = "DB"
 database_name = "caldesk"
-database_id = "00000000-0000-0000-0000-000000000000"
-# 上面这个 id 只是占位：真实 id 用 `npx wrangler d1 create caldesk` 创建后会打印，
-# 把它填回来（或让 wrangler 自动写回本文件）。
+database_id = "fbf5eb0b-3c5d-4726-85ba-511410db0d6f"
+
+# 建表不需要手工执行 SQL：Worker 首次请求时会跑 src/schema.ts 里的
+# CREATE TABLE IF NOT EXISTS（每个 isolate 一次）。
 
 # 本地开发：worker/.dev.vars 里写 SYNC_TOKEN=xxx（该文件已被 .gitignore 排除）
-# 线上：npx wrangler secret put SYNC_TOKEN
+# 线上：在 Cloudflare 控制台 Worker → 设置 → 变量和密钥 里加加密变量 SYNC_TOKEN

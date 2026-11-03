@@ -11,6 +11,8 @@
  * 鉴权：Authorization: Bearer <SYNC_TOKEN>
  */
 
+import { ensureSchema } from './schema'
+
 export interface Env {
   DB: D1Database
   SYNC_TOKEN: string
@@ -70,6 +72,9 @@ export default {
 
     if (!authorized(req, env)) return json({ error: 'unauthorized' }, 401)
     if (!env.DB) return json({ error: 'D1 未绑定' }, 500)
+
+    // 首次访问时把表建好（IF NOT EXISTS，每个 isolate 只跑一次）
+    await ensureSchema(env.DB as unknown as { prepare(sql: string): { run(): Promise<unknown> } })
 
     /* ---------------- 拉取 ---------------- */
     if (url.pathname === '/sync/pull' && req.method === 'GET') {
