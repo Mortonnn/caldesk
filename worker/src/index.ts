@@ -45,8 +45,9 @@ const ONLINE_WINDOW_MS = 5 * 60 * 1000
 const SECRET_HEX_LEN = 64
 const SALT_BYTES = 16
 
-/* 账号密码：PBKDF2-HMAC-SHA256，迭代次数写在账号行里，以后调高不会让老密码失效 */
-const PBKDF2_ITERS = 120_000
+/* 账号密码：PBKDF2-HMAC-SHA256，迭代次数写在账号行里，以后调高不会让老密码失效。
+   100000 是 Workers WebCrypto 的硬上限，超过会直接抛 NotSupportedError。 */
+const PBKDF2_ITERS = 100_000
 const PASSWORD_MIN = 10
 const USERNAME_MAX = 64
 
