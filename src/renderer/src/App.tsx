@@ -46,7 +46,7 @@ import { isDoneLine, lineText, splitLines } from '@shared/types'
 import { describeRrule, toDayNumber, weekdayOf } from '@shared/rrule'
 import { DEFAULT_SERVER_URL } from '@shared/identity'
 import { data } from './data'
-import { QrCode } from './QrCode'
+import { generateStrongPassword } from './password'
 
 const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日']
 
@@ -122,6 +122,8 @@ export default function App(): React.JSX.Element {
   const [miniVisible, setMiniVisible] = useState(false)
   /** 开机自启动：默认开，登录后安静进托盘 */
   const [autoStart, setAutoStart] = useState(true)
+  /** 关闭主窗口时收进托盘（设置里可关） */
+  const [closeToTray, setCloseToTray] = useState(true)
   const [cells, setCells] = useState<Record<string, string>>({})
   const [draftTask, setDraftTask] = useState('')
   const [cellError, setCellError] = useState<string | null>(null)
@@ -139,20 +141,16 @@ export default function App(): React.JSX.Element {
   const [results, setResults] = useState<SearchHit[]>([])
   const [panelError, setPanelError] = useState<string | null>(null)
   const [syncUrl, setSyncUrl] = useState('')
-  const [syncDeviceName, setSyncDeviceName] = useState('这台电脑')
+  const [syncDeviceName, setSyncDeviceName] = useState('')
   const [syncAccountId, setSyncAccountId] = useState('')
+  const [syncUsername, setSyncUsername] = useState('')
   const [syncPaired, setSyncPaired] = useState(false)
-  const [syncInvite, setSyncInvite] = useState('')
-  const [syncAccountName, setSyncAccountName] = useState('')
-  const [pairInfo, setPairInfo] = useState<{
-    pairId: string
-    code: string
-    qr: string
-    mode: 'qr' | 'code'
-  } | null>(null)
-  const [pairPending, setPairPending] = useState<
-    Array<{ deviceId: string; name: string; createdAt: number }>
-  >([])
+  /** 没登录时显示登录还是注册 */
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
+  const [authUser, setAuthUser] = useState('')
+  const [authPassword, setAuthPassword] = useState('')
+  const [authInvite, setAuthInvite] = useState('')
+  const [authBusy, setAuthBusy] = useState(false)
   const [deviceList, setDeviceList] = useState<
     Array<{
       deviceId: string
@@ -212,12 +210,14 @@ export default function App(): React.JSX.Element {
     void data.settings.get().then((s) => {
       setMiniVisible(s.miniVisible)
       setAutoStart(s.autoStart)
+      setCloseToTray(s.closeToTray)
     })
     void getThemeMode().then(setTheme)
     void data.sync.getState().then((s) => {
       setSyncUrl(s.serverUrl)
       setSyncDeviceName(s.deviceName)
       setSyncAccountId(s.accountId)
+      setSyncUsername(s.username)
       setSyncPaired(s.paired)
     })
     const offSync = data.sync.onDone((r) => {
@@ -240,65 +240,77 @@ export default function App(): React.JSX.Element {
     setSyncUrl(res.serverUrl)
     setSyncDeviceName(res.deviceName)
     setSyncPaired(res.paired)
-    setSyncMsg('已保存')
+    if (res.loggedOut) {
+      setSyncAccountId('')
+      setSyncUsername('')
+      setDeviceList([])
+      setSyncMsg('换了服务器，请重新登录')
+    } else {
+      setSyncMsg('已保存')
+    }
   }
 
-  /** 首次使用：创建账号，这台电脑就是第一个设备 */
-  async function createSyncAccount(): Promise<void> {
-    setSyncMsg('正在创建账号…')
-    const res = await data.sync.createAccount(syncInvite.trim(), syncAccountName.trim())
+  function fillStrongPassword(): void {
+    const pw = generateStrongPassword()
+    setAuthPassword(pw)
+    void navigator.clipboard?.writeText(pw).catch(() => {})
+    setSyncMsg('已生成强密码并复制到剪贴板')
+  }
+
+  /** 登录 / 注册：任意设备登录同一账号，就绑到同一份数据上 */
+  async function submitAuth(): Promise<void> {
+    const username = authUser.trim()
+    if (!username || !authPassword) {
+      setSyncMsg('请填写用户名和密码')
+      return
+    }
+    setAuthBusy(true)
+    setSyncMsg(authMode === 'login' ? '正在登录…' : '正在注册…')
+    const res =
+      authMode === 'login'
+        ? await data.sync.login({ username, password: authPassword })
+        : await data.sync.register({ username, password: authPassword, invite: authInvite.trim() })
+    setAuthBusy(false)
     if (!res.ok) {
-      setSyncMsg(`创建失败：${res.error}`)
+      setSyncMsg(`${authMode === 'login' ? '登录' : '注册'}失败：${res.error}`)
       return
     }
     setSyncAccountId(res.data.accountId)
+    setSyncUsername(res.data.username)
     setSyncPaired(true)
-    setSyncMsg('账号已创建，接下来可以给手机扫码配对')
+    setAuthPassword('')
+    setSyncMsg(authMode === 'login' ? '已登录，正在同步…' : '账号已创建，手机用同一个账号登录即可')
     void refreshDevices()
+    await runSyncNow()
   }
 
-  /** 生成配对二维码，手机扫这个 */
-  async function startPair(): Promise<void> {
-    setSyncMsg('正在生成配对码…')
-    const res = await data.sync.pairStart()
-    if (!res.ok) {
-      setSyncMsg(`无法配对：${res.error}`)
+  /** 配对时代的老账号：用现有凭据设一次用户名密码，数据一行不动 */
+  async function claimExisting(): Promise<void> {
+    const username = authUser.trim()
+    if (!username || !authPassword) {
+      setSyncMsg('请填写用户名和密码')
       return
     }
-    setPairInfo({ pairId: res.data.pairId, code: res.data.code, qr: res.data.qr, mode: 'qr' })
-    setPairPending([])
-    setSyncMsg('把二维码给手机扫')
-  }
-
-  /** 只显示配对码，手机手动输入 —— 没有摄像头/二维码不方便时用 */
-  async function startPairCode(): Promise<void> {
-    setSyncMsg('正在生成配对码…')
-    const res = await data.sync.pairStart()
+    setAuthBusy(true)
+    const res = await data.sync.claim({ username, password: authPassword })
+    setAuthBusy(false)
     if (!res.ok) {
-      setSyncMsg(`无法配对：${res.error}`)
+      setSyncMsg(`设置失败：${res.error}`)
       return
     }
-    setPairInfo({ pairId: res.data.pairId, code: res.data.code, qr: res.data.qr, mode: 'code' })
-    setPairPending([])
-    setSyncMsg('在手机上手动输入这个配对码')
+    setSyncUsername(res.data.username)
+    setAuthPassword('')
+    setSyncMsg('已设置用户名密码，其他设备可以直接登录了')
   }
 
-  /** 轮询待批准的设备 */
-  useEffect(() => {
-    if (!pairInfo) return
-    let stop = false
-    const tick = async (): Promise<void> => {
-      const res = await data.sync.pairPending(pairInfo.pairId)
-      if (stop) return
-      if (res.ok) setPairPending(res.data)
-    }
-    void tick()
-    const timer = setInterval(() => void tick(), 2000)
-    return () => {
-      stop = true
-      clearInterval(timer)
-    }
-  }, [pairInfo])
+  async function logoutSync(): Promise<void> {
+    await data.sync.logout()
+    setSyncPaired(false)
+    setSyncAccountId('')
+    setSyncUsername('')
+    setDeviceList([])
+    setSyncMsg('已退出登录，本机数据还在')
+  }
 
   /** 设备列表 + 在线数 */
   async function refreshDevices(): Promise<void> {
@@ -313,19 +325,6 @@ export default function App(): React.JSX.Element {
     if (syncPaired) void refreshDevices()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [syncPaired])
-
-  async function approvePair(deviceId: string): Promise<void> {
-    if (!pairInfo) return
-    const res = await data.sync.pairApprove(pairInfo.pairId, deviceId)
-    setSyncMsg(res.ok ? '已批准，可以同步了' : `批准失败：${res.error}`)
-    if (res.ok) void refreshDevices()
-  }
-
-  async function rejectPair(deviceId: string): Promise<void> {
-    if (!pairInfo) return
-    const res = await data.sync.pairReject(pairInfo.pairId, deviceId)
-    if (res.ok) setPairPending((prev) => prev.filter((d) => d.deviceId !== deviceId))
-  }
 
   async function revokeDevice(deviceId: string): Promise<void> {
     const res = await data.sync.revokeDevice(deviceId)
@@ -823,6 +822,14 @@ export default function App(): React.JSX.Element {
                 void data.settings.get().then((s) => {
                   setMiniVisible(s.miniVisible)
                   setAutoStart(s.autoStart)
+                  setCloseToTray(s.closeToTray)
+                })
+                void data.sync.getState().then((s) => {
+                  setSyncUrl(s.serverUrl)
+                  setSyncDeviceName(s.deviceName)
+                  setSyncAccountId(s.accountId)
+                  setSyncUsername(s.username)
+                  setSyncPaired(s.paired)
                 })
                 void loadSnaps()
               }
@@ -1315,9 +1322,25 @@ export default function App(): React.JSX.Element {
                     </div>
                     <div className="pop-row">
                       <div>
-                        <span className="pop-label-row">关闭主窗口</span>
-                        <p className="pop-desc">收进托盘继续后台同步，从托盘菜单退出</p>
+                        <span className="pop-label-row">关闭后进入托盘</span>
+                        <p className="pop-desc">
+                          {closeToTray
+                            ? '收进托盘继续后台同步，从托盘菜单退出'
+                            : '直接退出程序，后台不再同步'}
+                        </p>
                       </div>
+                      <button
+                        role="switch"
+                        aria-checked={closeToTray}
+                        className={`switch ${closeToTray ? 'on' : ''}`}
+                        onClick={() => {
+                          const next = !closeToTray
+                          setCloseToTray(next)
+                          void data.settings.setCloseToTray(next)
+                        }}
+                      >
+                        <span className="switch-knob" />
+                      </button>
                     </div>
                   </section>
 
@@ -1344,50 +1367,76 @@ export default function App(): React.JSX.Element {
 
                   <section className="set-block">
                     <span className="pop-label">同步</span>
-                    {!syncPaired ? (
-                      <div className="sync-create">
-                        <input
-                          className="task-input"
-                          placeholder="账号名称"
-                          value={syncAccountName}
-                          onChange={(e) => setSyncAccountName(e.target.value)}
-                        />
-                        <input
-                          className="task-input"
-                          placeholder="邀请码（服务器设置了才需要）"
-                          value={syncInvite}
-                          onChange={(e) => setSyncInvite(e.target.value)}
-                        />
-                        <button className="primary-btn" onClick={() => void createSyncAccount()}>
-                          创建账号
-                        </button>
-                      </div>
-                    ) : (
+
+                    <div className="sync-server">
+                      <input
+                        className="task-input"
+                        placeholder={
+                          DEFAULT_SERVER_URL
+                            ? `服务器地址（留空 = ${DEFAULT_SERVER_URL}）`
+                            : '服务器地址，例如 https://caldesk.workers.dev'
+                        }
+                        value={syncUrl}
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        onChange={(e) => setSyncUrl(e.target.value)}
+                      />
+                      <button className="ghost" onClick={() => void saveSyncServer()}>
+                        保存
+                      </button>
+                    </div>
+
+                    {syncPaired ? (
                       <div className="sync-paired">
-                        <div className="sync-server">
-                          <input
-                            className="task-input"
-                            placeholder={
-                              DEFAULT_SERVER_URL
-                                ? `服务器地址（留空 = ${DEFAULT_SERVER_URL}）`
-                                : '服务器地址，例如 https://caldesk.workers.dev'
-                            }
-                            value={syncUrl}
-                            autoCapitalize="none"
-                            autoCorrect="off"
-                            onChange={(e) => setSyncUrl(e.target.value)}
-                          />
-                          <button className="ghost" onClick={() => void saveSyncServer()}>
-                            保存
+                        <div className="pop-row">
+                          <div>
+                            <span className="pop-label-row">{syncUsername || '已登录'}</span>
+                            <p className="pop-desc">
+                              {syncUsername
+                                ? '其他设备用同一个账号登录，读写同一份日历'
+                                : '这个账号还没有用户名密码'}
+                            </p>
+                          </div>
+                          <button className="ghost" onClick={() => void logoutSync()}>
+                            退出登录
                           </button>
                         </div>
+
+                        {!syncUsername && (
+                          <div className="sync-create">
+                            <p className="pop-desc">
+                              这是配对时代创建的账号：设置一组用户名密码，手机或另一台电脑就能直接登录。
+                            </p>
+                            <input
+                              className="task-input"
+                              placeholder="用户名"
+                              autoCapitalize="none"
+                              value={authUser}
+                              onChange={(e) => setAuthUser(e.target.value)}
+                            />
+                            <input
+                              className="task-input"
+                              type="password"
+                              placeholder="密码（至少 10 位，含大小写、数字、符号）"
+                              value={authPassword}
+                              onChange={(e) => setAuthPassword(e.target.value)}
+                            />
+                            <div className="note-actions">
+                              <button className="ghost" onClick={fillStrongPassword}>
+                                生成强密码
+                              </button>
+                              <button
+                                className="primary-btn"
+                                disabled={authBusy}
+                                onClick={() => void claimExisting()}
+                              >
+                                设置账号密码
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
                         <div className="note-actions">
-                          <button className="ghost" onClick={() => void startPair()}>
-                            二维码配对
-                          </button>
-                          <button className="ghost" onClick={() => void startPairCode()}>
-                            配对码配对
-                          </button>
                           <button
                             className="primary-btn"
                             disabled={syncing}
@@ -1397,46 +1446,11 @@ export default function App(): React.JSX.Element {
                           </button>
                         </div>
 
-                        {pairInfo && (
-                          <div className="pair-box">
-                            {pairInfo.mode === 'qr' ? (
-                              <div className="pair-qr">
-                                <QrCode text={pairInfo.qr} size={176} />
-                              </div>
-                            ) : (
-                              <div className="pair-code-big">{pairInfo.code}</div>
-                            )}
-                            {pairPending.length > 0 && (
-                              <div className="pair-list">
-                                {pairPending.map((d) => (
-                                  <div key={d.deviceId} className="pair-row">
-                                    <span className="snap-label">
-                                      {d.name || d.deviceId.slice(0, 8)}
-                                    </span>
-                                    <button
-                                      className="ghost"
-                                      onClick={() => void approvePair(d.deviceId)}
-                                    >
-                                      批准
-                                    </button>
-                                    <button
-                                      className="ghost"
-                                      onClick={() => void rejectPair(d.deviceId)}
-                                    >
-                                      拒绝
-                                    </button>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        )}
-
                         {deviceList.length > 0 && (
                           <div className="pair-list">
                             <div className="pop-row">
                               <span className="pop-label-row">
-                                已配对设备{syncOnline > 0 ? ` · ${syncOnline} 台在线` : ''}
+                                已登录设备{syncOnline > 0 ? ` · ${syncOnline} 台在线` : ''}
                               </span>
                             </div>
                             {deviceList.map((d) => (
@@ -1457,6 +1471,61 @@ export default function App(): React.JSX.Element {
                             ))}
                           </div>
                         )}
+                      </div>
+                    ) : (
+                      <div className="sync-create">
+                        <div className="seg-group">
+                          <button
+                            className={`seg-item ${authMode === 'login' ? 'on' : ''}`}
+                            onClick={() => setAuthMode('login')}
+                          >
+                            登录
+                          </button>
+                          <button
+                            className={`seg-item ${authMode === 'register' ? 'on' : ''}`}
+                            onClick={() => setAuthMode('register')}
+                          >
+                            注册
+                          </button>
+                        </div>
+                        <input
+                          className="task-input"
+                          placeholder="用户名"
+                          autoCapitalize="none"
+                          autoCorrect="off"
+                          value={authUser}
+                          onChange={(e) => setAuthUser(e.target.value)}
+                        />
+                        <input
+                          className="task-input"
+                          type="password"
+                          placeholder="密码（至少 10 位，含大小写、数字、符号）"
+                          value={authPassword}
+                          onChange={(e) => setAuthPassword(e.target.value)}
+                        />
+                        {authMode === 'register' && (
+                          <input
+                            className="task-input"
+                            placeholder="邀请码（服务器设置了才需要）"
+                            value={authInvite}
+                            onChange={(e) => setAuthInvite(e.target.value)}
+                          />
+                        )}
+                        <div className="note-actions">
+                          <button className="ghost" onClick={fillStrongPassword}>
+                            生成强密码
+                          </button>
+                          <button
+                            className="primary-btn"
+                            disabled={authBusy}
+                            onClick={() => void submitAuth()}
+                          >
+                            {authBusy ? '处理中…' : authMode === 'login' ? '登录' : '注册并登录'}
+                          </button>
+                        </div>
+                        <p className="pop-desc">
+                          同一账号在任意设备登录，都读写同一份日历；换设备不需要配对。
+                        </p>
                       </div>
                     )}
                     {syncMsg && <span className="hint">{syncMsg}</span>}

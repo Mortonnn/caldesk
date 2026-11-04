@@ -43,7 +43,11 @@ interface RemoteRow {
 }
 
 function authHeader(id: StoredIdentity): Record<string, string> {
-  return { authorization: `Bearer ${id.deviceId}.${id.deviceSecret}` }
+  // 顺带上报设备名：本地改过名（或从"这台电脑"迁移过来）时，服务端下一次请求就会同步
+  return {
+    authorization: `Bearer ${id.deviceId}.${id.deviceSecret}`,
+    'x-device-name': id.deviceName
+  }
 }
 
 async function call<T>(
@@ -189,50 +193,120 @@ export async function syncNow(id: StoredIdentity, options: SyncOptions = {}): Pr
   }
 }
 
-/* ------------------------------ 账号与配对 ------------------------------ */
+/* ------------------------------ 账号 ------------------------------ */
 
-export interface PairStart {
-  pairId: string
-  code: string
-  expiresAt: number
-}
-
-export interface PendingDevice {
+export interface AccountInfo {
+  accountId: string
+  username: string
+  /** 这个账号有没有设过用户名密码（配对时代的老账号是 false） */
+  claimed: boolean
   deviceId: string
-  name: string
-  createdAt: number
+  deviceName: string
 }
 
-/** 已配对的电脑发起一次配对，得到二维码里要放的 pairId / code */
-export async function startPairing(id: StoredIdentity): Promise<PairStart> {
-  return call<PairStart>(id, '/pair/start', { method: 'POST', body: {} })
+export interface AuthInput {
+  username: string
+  password: string
+  /** 私有部署的邀请码，服务器没设置就不用填 */
+  invite?: string
 }
 
-export async function listPendingDevices(
+function serverBase(id: StoredIdentity): string {
+  const base = id.serverUrl.replace(/\/$/, '')
+  if (!base) throw new Error('还没填服务器地址')
+  return base
+}
+
+/** 读服务端错误体里的中文说明，别把整段 JSON 甩到界面上 */
+async function readError(res: Response): Promise<string> {
+  const text = await res.text()
+  if (res.status === 404) return '服务器版本太旧，还没有账号密码接口，先部署新版 Worker'
+  try {
+    const body = JSON.parse(text) as { message?: string; error?: string }
+    return body.message || body.error || `HTTP ${res.status}`
+  } catch {
+    return `HTTP ${res.status}: ${text.slice(0, 120)}`
+  }
+}
+
+async function postAuth<T>(
   id: StoredIdentity,
-  pairId: string
-): Promise<PendingDevice[]> {
-  const res = await call<{ devices: PendingDevice[] }>(
+  path: string,
+  body: unknown,
+  withAuth = false
+): Promise<T> {
+  const res = await fetch(serverBase(id) + path, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(withAuth ? authHeader(id) : {})
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(20000)
+  })
+  if (!res.ok) throw new Error(await readError(res))
+  return (await res.json()) as T
+}
+
+/** 注册：建账号 + 这台电脑作为首台设备 */
+export async function registerAccount(
+  id: StoredIdentity,
+  input: AuthInput
+): Promise<{ accountId: string; username: string }> {
+  return postAuth<{ accountId: string; username: string }>(id, '/auth/register', {
+    username: input.username,
+    password: input.password,
+    invite: input.invite ?? '',
+    deviceId: id.deviceId,
+    secret: id.deviceSecret,
+    deviceName: id.deviceName
+  })
+}
+
+/** 登录：任意设备登录同一账号，就绑到同一个 accountId（不需要配对） */
+export async function loginAccount(
+  id: StoredIdentity,
+  input: AuthInput
+): Promise<{ accountId: string; username: string }> {
+  return postAuth<{ accountId: string; username: string }>(id, '/auth/login', {
+    username: input.username,
+    password: input.password,
+    deviceId: id.deviceId,
+    secret: id.deviceSecret,
+    deviceName: id.deviceName
+  })
+}
+
+/** 老账号认领：用现有设备凭据设一次用户名密码，数据一行不动 */
+export async function claimAccount(
+  id: StoredIdentity,
+  input: AuthInput
+): Promise<{ accountId: string; username: string }> {
+  return postAuth<{ accountId: string; username: string }>(
     id,
-    `/pair/pending?pairId=${encodeURIComponent(pairId)}`
+    '/auth/claim',
+    { username: input.username, password: input.password },
+    true
   )
-  return res.devices ?? []
 }
 
-export async function approveDevice(
-  id: StoredIdentity,
-  pairId: string,
-  deviceId: string
-): Promise<void> {
-  await call(id, '/pair/approve', { method: 'POST', body: { pairId, deviceId } })
+export async function accountInfo(id: StoredIdentity): Promise<AccountInfo> {
+  const res = await fetch(serverBase(id) + '/auth/me', {
+    headers: authHeader(id),
+    signal: AbortSignal.timeout(15000)
+  })
+  if (!res.ok) throw new Error(await readError(res))
+  return (await res.json()) as AccountInfo
 }
 
-export async function rejectDevice(
-  id: StoredIdentity,
-  pairId: string,
-  deviceId: string
-): Promise<void> {
-  await call(id, '/pair/reject', { method: 'POST', body: { pairId, deviceId } })
+export async function logoutDevice(id: StoredIdentity): Promise<void> {
+  const res = await fetch(serverBase(id) + '/auth/logout', {
+    method: 'POST',
+    headers: { ...authHeader(id), 'content-type': 'application/json' },
+    body: '{}',
+    signal: AbortSignal.timeout(15000)
+  })
+  if (!res.ok && res.status !== 401) throw new Error(await readError(res))
 }
 
 export interface DeviceList {
@@ -253,27 +327,4 @@ export async function listDevices(id: StoredIdentity): Promise<DeviceList> {
 
 export async function revokeDevice(id: StoredIdentity, deviceId: string): Promise<void> {
   await call(id, '/devices/revoke', { method: 'POST', body: { deviceId } })
-}
-
-/** 首次建账号：本机既是 owner 设备，也是账号的起点 */
-export async function createAccount(
-  id: StoredIdentity,
-  options: { invite: string; accountName: string }
-): Promise<{ accountId: string }> {
-  const base = id.serverUrl.replace(/\/$/, '')
-  if (!base) throw new Error('还没填服务器地址')
-  const res = await fetch(`${base}/account/create`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      invite: options.invite,
-      accountName: options.accountName,
-      deviceId: id.deviceId,
-      accountSecret: id.deviceSecret,
-      deviceName: id.deviceName
-    }),
-    signal: AbortSignal.timeout(20000)
-  })
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 160)}`)
-  return (await res.json()) as { accountId: string }
 }

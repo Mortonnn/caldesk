@@ -1,108 +1,64 @@
 /**
- * 手机端配对页。
+ * 桌面浏览器里的首次进入页（没有 Electron 宿主时）。
  *
- * 只留两种加入方式：扫二维码 / 输配对码。
- * 不堆小字说明 —— 界面自己说话。
+ * 与手机端同一套账号密码：注册或登录，之后所有设备共享同一份日历。
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { BarcodeScanner } from './BarcodeScanner'
 import { CalMark } from './icons'
 import { DUR, EASE_OUT, riseIn } from './motion'
+import { generateStrongPassword } from './password'
 import { data } from './data'
-import { DEFAULT_SERVER_URL, parsePairText, resolveServerUrl } from './mobileIdentity'
+import { DEFAULT_SERVER_URL, resolveServerUrl } from './mobileIdentity'
 
-export default function Setup(): React.JSX.Element {
-  const [step, setStep] = useState<'welcome' | 'scan'>('welcome')
+type Mode = 'login' | 'register'
+
+export default function Setup({ onDone }: { onDone?: () => void }): React.JSX.Element {
+  const [mode, setMode] = useState<Mode>('login')
   const [url, setUrl] = useState('')
-  const [code, setCode] = useState('')
-  const [deviceName, setDeviceName] = useState('我的手机')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [invite, setInvite] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [hint, setHint] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [status, setStatus] = useState<string | null>(null)
 
-  /** 扫码或手输之后：提交入伙申请，然后等电脑批准 */
-  async function join(pairText: string): Promise<void> {
-    setBusy(true)
+  useEffect(() => {
+    void data.sync.getState().then((s) => setUrl(s.serverUrl || ''))
+  }, [])
+
+  async function submit(): Promise<void> {
     setError(null)
-    try {
-      const res = await data.sync.pairJoin(pairText)
-      if (!res.ok) {
-        setError(res.error)
-        return
-      }
-      setStatus('等电脑批准…')
-      // 轮询状态：批准后就能用了。
-      // 注意只查状态，不要重复提交 join（重复 join 会因为设备已存在而报错）
-      for (let i = 0; i < 60; i += 1) {
-        await new Promise((r) => setTimeout(r, 1500))
-        const st = await data.sync.pairStatus(pairText)
-        if (!st.ok) continue
-        if (st.data.status === 'approved') {
-          setStatus('已批准')
-          setTimeout(() => location.reload(), 600)
-          return
-        }
-        if (st.data.status === 'rejected' || st.data.status === 'expired') {
-          setError('电脑拒绝了这次配对')
-          setStatus(null)
-          return
-        }
-      }
-      setStatus('还在等电脑批准')
-    } catch (err) {
-      setError((err as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function joinByCode(): Promise<void> {
-    // 地址留空 = 用默认服务器
-    const u = resolveServerUrl(url)
-    if (!/^https?:\/\//.test(u)) {
-      setError('地址需要以 http:// 或 https:// 开头')
+    setHint(null)
+    const server = resolveServerUrl(url)
+    if (!/^https?:\/\//.test(server)) {
+      setError('先填服务器地址，例如 https://caldesk.workers.dev')
       return
     }
-    if (!/^\d{6}$/.test(code.trim())) {
-      setError('配对码是 6 位数字')
+    if (!username.trim() || !password) {
+      setError('请填写用户名和密码')
       return
     }
-    // pairId 从二维码里才有；手动输入码时留空，服务端按 code 查
-    await join(JSON.stringify({ v: 1, u, p: '', c: code.trim() }))
+    setBusy(true)
+    await data.sync.setServer(server, '')
+    const res =
+      mode === 'login'
+        ? await data.sync.login({ username: username.trim(), password })
+        : await data.sync.register({ username: username.trim(), password, invite: invite.trim() })
+    setBusy(false)
+    if (!res.ok) {
+      setError(res.error)
+      return
+    }
+    if (onDone) onDone()
+    else location.reload()
   }
 
-  if (step === 'scan') {
-    return (
-      <div className="setup">
-        <motion.div
-          className="setup-card"
-          variants={riseIn(10)}
-          initial="initial"
-          animate="animate"
-          transition={{ duration: DUR.page, ease: EASE_OUT }}
-        >
-          <h1>
-            <CalMark size={20} />
-            扫二维码
-          </h1>
-          <BarcodeScanner
-            onCancel={() => setStep('welcome')}
-            onError={(m) => setError(m)}
-            onResult={(text) => {
-              const parsed = parsePairText(text)
-              if (!parsed) {
-                setError('这不是配对二维码')
-                return
-              }
-              void join(text)
-            }}
-          />
-          {status && <p className="setup-hint">{status}</p>}
-          {error && <p className="cal-error">{error}</p>}
-        </motion.div>
-      </div>
-    )
+  function generate(): void {
+    const pw = generateStrongPassword()
+    setPassword(pw)
+    setHint('已生成强密码并复制到剪贴板')
+    void navigator.clipboard?.writeText(pw).catch(() => {})
   }
 
   return (
@@ -116,54 +72,67 @@ export default function Setup(): React.JSX.Element {
       >
         <h1>
           <CalMark size={20} />
-          连接你的日历
+          {mode === 'login' ? '登录 caldesk' : '创建账号'}
         </h1>
 
-        <button className="primary-btn setup-btn" onClick={() => setStep('scan')}>
-          扫二维码
-        </button>
+        <div className="seg-group">
+          <button
+            className={`seg-item ${mode === 'login' ? 'on' : ''}`}
+            onClick={() => setMode('login')}
+          >
+            登录
+          </button>
+          <button
+            className={`seg-item ${mode === 'register' ? 'on' : ''}`}
+            onClick={() => setMode('register')}
+          >
+            注册
+          </button>
+        </div>
 
-        <div className="setup-divider">或</div>
-
-        <label className="setup-label">配对码</label>
-        <input
-          className="task-input setup-code"
-          placeholder="6 位数字"
-          inputMode="numeric"
-          value={code}
-          onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-        />
-
-        <label className="setup-label">设备名</label>
-        <input
-          className="task-input"
-          value={deviceName}
-          onChange={(e) => setDeviceName(e.target.value)}
-        />
-
-        <label className="setup-label">服务器</label>
         <input
           className="task-input"
-          placeholder={DEFAULT_SERVER_URL || 'https://你的-worker.workers.dev'}
-          value={url}
+          placeholder="用户名"
           autoCapitalize="none"
           autoCorrect="off"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+        />
+        <input
+          className="task-input"
+          type="password"
+          placeholder="密码（至少 10 位，含大小写、数字、符号）"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+        {mode === 'register' && (
+          <input
+            className="task-input"
+            placeholder="邀请码（服务器设置了才需要）"
+            value={invite}
+            onChange={(e) => setInvite(e.target.value)}
+          />
+        )}
+        <input
+          className="task-input"
+          placeholder={DEFAULT_SERVER_URL || '服务器地址，例如 https://caldesk.workers.dev'}
+          autoCapitalize="none"
+          autoCorrect="off"
+          value={url}
           onChange={(e) => setUrl(e.target.value)}
         />
 
         {error && <p className="cal-error">{error}</p>}
-        {status && <p className="setup-hint">{status}</p>}
+        {hint && <p className="setup-hint">{hint}</p>}
 
-        <button
-          className="primary-btn setup-btn"
-          disabled={busy || code.length !== 6}
-          onClick={() => {
-            void data.sync.setServer(url.trim(), deviceName.trim())
-            void joinByCode()
-          }}
-        >
-          {busy ? '等待批准…' : '用配对码加入'}
-        </button>
+        <div className="note-actions">
+          <button className="ghost" onClick={generate}>
+            生成强密码
+          </button>
+          <button className="primary-btn" disabled={busy} onClick={() => void submit()}>
+            {busy ? '处理中…' : mode === 'login' ? '登录' : '注册并登录'}
+          </button>
+        </div>
       </motion.div>
     </div>
   )

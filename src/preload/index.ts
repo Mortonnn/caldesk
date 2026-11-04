@@ -32,9 +32,12 @@ const api = {
       miniVisible: boolean
       miniPinned: boolean
       autoStart: boolean
+      closeToTray: boolean
     }>,
     setAutoStart: (on: boolean) =>
-      ipcRenderer.invoke('settings:set-auto-start', on) as Promise<boolean>
+      ipcRenderer.invoke('settings:set-auto-start', on) as Promise<boolean>,
+    setCloseToTray: (on: boolean) =>
+      ipcRenderer.invoke('settings:set-close-to-tray', on) as Promise<boolean>
   },
   calendars: {
     list: () => ipcRenderer.invoke('calendars:list') as Promise<IpcResult<CalendarMeta[]>>,
@@ -114,6 +117,7 @@ const api = {
         deviceId: string
         deviceName: string
         accountId: string
+        username: string
         paired: boolean
       }>,
     setServer: (url: string, deviceName: string) =>
@@ -121,31 +125,32 @@ const api = {
         serverUrl: string
         deviceName: string
         paired: boolean
+        loggedOut: boolean
       }>,
-    createAccount: (invite: string, accountName: string) =>
-      ipcRenderer.invoke('sync:create-account', invite, accountName) as Promise<IpcResult<{
-        accountId: string
-      }>>,
-    pairStart: () =>
-      ipcRenderer.invoke('sync:pair-start') as Promise<
-        IpcResult<{ pairId: string; code: string; expiresAt: number; qr: string }>
+    register: (input: { username: string; password: string; invite?: string }) =>
+      ipcRenderer.invoke('sync:register', input) as Promise<
+        IpcResult<{ accountId: string; username: string }>
       >,
-    pairJoin: (payload: string) =>
-      ipcRenderer.invoke('sync:pair-join', payload) as Promise<
-        IpcResult<{ status: 'pending' | 'approved' | 'rejected' | 'expired' }>
+    login: (input: { username: string; password: string }) =>
+      ipcRenderer.invoke('sync:login', input) as Promise<
+        IpcResult<{ accountId: string; username: string }>
       >,
-    pairStatus: (payload: string) =>
-      ipcRenderer.invoke('sync:pair-status', payload) as Promise<
-        IpcResult<{ status: 'pending' | 'approved' | 'rejected' | 'expired' | 'unknown' }>
+    claim: (input: { username: string; password: string }) =>
+      ipcRenderer.invoke('sync:claim', input) as Promise<
+        IpcResult<{ accountId: string; username: string }>
       >,
-    pairPending: (pairId: string) =>
-      ipcRenderer.invoke('sync:pair-pending', pairId) as Promise<
-        IpcResult<Array<{ deviceId: string; name: string; createdAt: number }>>
+    logout: () =>
+      ipcRenderer.invoke('sync:logout') as Promise<IpcResult<{ loggedOut: boolean }>>,
+    me: () =>
+      ipcRenderer.invoke('sync:me') as Promise<
+        IpcResult<{
+          accountId: string
+          username: string
+          claimed: boolean
+          deviceId: string
+          deviceName: string
+        }>
       >,
-    pairApprove: (pairId: string, deviceId: string) =>
-      ipcRenderer.invoke('sync:pair-approve', pairId, deviceId) as Promise<IpcResult<boolean>>,
-    pairReject: (pairId: string, deviceId: string) =>
-      ipcRenderer.invoke('sync:pair-reject', pairId, deviceId) as Promise<IpcResult<boolean>>,
     devices: () =>
       ipcRenderer.invoke('sync:devices') as Promise<
         IpcResult<{

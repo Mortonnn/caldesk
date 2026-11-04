@@ -114,6 +114,11 @@ export default function MobileApp(): React.JSX.Element {
   const [adding, setAdding] = useState(false)
   const [draft, setDraft] = useState('')
   const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL)
+  const [username, setUsername] = useState('')
+  const [serverDraft, setServerDraft] = useState('')
+  const [newCal, setNewCal] = useState('')
+  const [calBusy, setCalBusy] = useState(false)
+  const [confirmCal, setConfirmCal] = useState<string | null>(null)
   const [devices, setDevices] = useState<DeviceListResult['devices']>([])
   const [loadError, setLoadError] = useState<string | null>(null)
   /** 右上角日历切换菜单 */
@@ -141,11 +146,13 @@ export default function MobileApp(): React.JSX.Element {
     void (async () => {
       const st = await data.sync.getState()
       setPaired(st.paired)
+      setUsername(st.username)
+      setServerUrl(st.serverUrl || DEFAULT_SERVER_URL)
+      setServerDraft(st.serverUrl || '')
       if (!st.paired) {
         setReady(true)
         return
       }
-      setServerUrl(st.serverUrl || DEFAULT_SERVER_URL)
       const list = await data.calendars.list()
       if (list.ok) {
         setCalendars(list.data)
@@ -158,6 +165,11 @@ export default function MobileApp(): React.JSX.Element {
       })
     })()
   }, [])
+
+  /* 应用真正可用了再移除启动画面（移动端首帧由 index.html 内联绘制） */
+  useEffect(() => {
+    if (ready) window.__caldeskReady?.()
+  }, [ready])
 
   /* 拉当月的数据 */
   const loadRange = useCallback(async (cal: string, center: string) => {
@@ -433,8 +445,10 @@ export default function MobileApp(): React.JSX.Element {
 
   if (!ready) {
     return (
-      <div className="m-shell">
-        <div className="m-body" />
+      <div className="m-shell m-boot">
+        <span className="m-boot-tile">
+          <CalMark size={44} />
+        </span>
       </div>
     )
   }
@@ -706,7 +720,152 @@ export default function MobileApp(): React.JSX.Element {
           {tab === 'settings' && (
             <div className="m-list">
               <div className="m-group">
-                <div className="m-group-date">已配对设备</div>
+                <div className="m-group-date">账号</div>
+                <div className="m-card">
+                  <div className="m-group-item">
+                    <div className="m-group-main">
+                      <div className="m-group-title">{username || '未登录'}</div>
+                      <div className="m-group-sub">
+                        {serverUrl.replace(/^https?:\/\//, '')}
+                      </div>
+                    </div>
+                    <button
+                      className="m-side-btn"
+                      onClick={() => {
+                        void (async () => {
+                          await data.sync.logout()
+                          setPaired(false)
+                          setCalendars([])
+                          setCells({})
+                          setEvents([])
+                          setDevices([])
+                        })()
+                      }}
+                    >
+                      退出登录
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="m-group">
+                <div className="m-group-date">服务器</div>
+                <div className="m-card">
+                  <div className="m-set-row">
+                    <input
+                      className="m-set-input"
+                      value={serverDraft}
+                      placeholder="https://你的-worker.workers.dev"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      inputMode="url"
+                      onChange={(e) => setServerDraft(e.target.value)}
+                    />
+                    <button
+                      className="m-side-btn"
+                      onClick={() => {
+                        void (async () => {
+                          const res = await data.sync.setServer(serverDraft.trim(), '')
+                          setServerUrl(res.serverUrl)
+                          setServerDraft(res.serverUrl)
+                          if (res.loggedOut) {
+                            setPaired(false)
+                            setCalendars([])
+                            setCells({})
+                            setEvents([])
+                            return
+                          }
+                          say('已保存')
+                        })()
+                      }}
+                    >
+                      保存
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="m-group">
+                <div className="m-group-date">日历</div>
+                <div className="m-card">
+                  {calendars.map((c) => (
+                    <div className="m-group-item" key={c.id}>
+                      <div className="m-event-bar" style={{ background: c.color }} />
+                      <div className="m-group-main">
+                        <div className="m-group-title">{c.name}</div>
+                      </div>
+                      {confirmCal === c.id ? (
+                        <div className="m-confirm-row">
+                          <button className="m-side-btn" onClick={() => setConfirmCal(null)}>
+                            取消
+                          </button>
+                          <button
+                            className="m-side-btn danger"
+                            onClick={() => {
+                              void (async () => {
+                                const res = await data.calendars.remove(c.id)
+                                setConfirmCal(null)
+                                if (!res.ok) {
+                                  say(res.error)
+                                  return
+                                }
+                                setCalendars(res.data)
+                                if (calId === c.id) setCalId(res.data[0]?.id ?? '')
+                                say('已删除')
+                              })()
+                            }}
+                          >
+                            删除
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          className="m-icon-mini"
+                          aria-label={`删除日历 ${c.name}`}
+                          disabled={calendars.length <= 1}
+                          onClick={() => setConfirmCal(c.id)}
+                        >
+                          {Icon.trash}
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  <div className="m-set-row">
+                    <input
+                      className="m-set-input"
+                      value={newCal}
+                      placeholder="新日历名称"
+                      onChange={(e) => setNewCal(e.target.value)}
+                    />
+                    <button
+                      className="m-side-btn"
+                      disabled={!newCal.trim() || calBusy}
+                      onClick={() => {
+                        void (async () => {
+                          const name = newCal.trim()
+                          if (!name) return
+                          setCalBusy(true)
+                          const res = await data.calendars.create(name)
+                          setCalBusy(false)
+                          if (!res.ok) {
+                            say(res.error)
+                            return
+                          }
+                          setCalendars(res.data.calendars)
+                          setCalId(res.data.created.id)
+                          setNewCal('')
+                          say('已新建')
+                        })()
+                      }}
+                    >
+                      添加
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="m-group">
+                <div className="m-group-date">已登录设备</div>
                 <div className="m-card">
                   {devices.length === 0 ? (
                     <div className="m-empty">读不到设备列表</div>
@@ -726,33 +885,6 @@ export default function MobileApp(): React.JSX.Element {
                       </div>
                     ))
                   )}
-                </div>
-              </div>
-
-              <div className="m-group">
-                <div className="m-group-date">日历</div>
-                <div className="m-card">
-                  {calendars.map((c) => (
-                    <div className="m-group-item" key={c.id}>
-                      <div className="m-event-bar" style={{ background: c.color }} />
-                      <div className="m-group-main">
-                        <div className="m-group-title">{c.name}</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="m-group">
-                <div className="m-group-date">服务器</div>
-                <div className="m-card">
-                  <div className="m-group-item">
-                    <div className="m-group-main">
-                      <div className="m-group-title">
-                        {serverUrl.replace(/^https?:\/\//, '')}
-                      </div>
-                    </div>
-                  </div>
                 </div>
               </div>
             </div>

@@ -35,18 +35,17 @@ import {
 import type { EventInput, NoteInput } from '@shared/types'
 import { startApiServer, type ApiHandle } from './api'
 import {
-  approveDevice,
-  createAccount,
+  accountInfo,
+  claimAccount,
   listDevices,
-  listPendingDevices,
-  rejectDevice,
+  loginAccount,
+  logoutDevice,
+  registerAccount,
   remoteChangeToken,
   revokeDevice,
-  startPairing,
   syncNow
 } from './sync'
 import { ensureIdentity, isPaired, saveIdentity, type StoredIdentity } from './identity'
-import { pairingQrText, parsePairingQr } from '@shared/identity'
 import { migrateFromOldApp } from './migrate'
 
 /* --------------------------- 命令行开关 --------------------------- */
@@ -69,6 +68,12 @@ const openSettings = process.argv.includes('--open-settings')
 const evalFile = argValue('--eval-file')
 /** 登录自启时由启动项带上：只起托盘与浮窗，不弹主窗口 */
 const startHidden = process.argv.includes('--hidden')
+/** `--user-data <dir>`：端到端测试用独立数据目录，不碰真实身份与数据库 */
+const userDataArg = argValue('--user-data')
+if (userDataArg) {
+  mkdirSync(userDataArg, { recursive: true })
+  app.setPath('userData', userDataArg)
+}
 
 type ThemeMode = 'system' | 'light' | 'dark'
 
@@ -130,6 +135,8 @@ interface WindowState {
   miniPinned: boolean
   /** 登录 Windows 后自动启动：默认开，启动到托盘不弹主窗口 */
   autoStart: boolean
+  /** 关闭主窗口时收进托盘（默认开）；关掉就变成"关闭即退出" */
+  closeToTray: boolean
   /** 默认跟随系统 */
   themeMode: ThemeMode
 }
@@ -144,6 +151,8 @@ const DEFAULT_STATE: WindowState = {
   miniPinned: false,
   // 默认开机自启：这是个"每天都会看一眼"的日历，登录后安静待在托盘里最合适
   autoStart: true,
+  // 默认关闭窗口进托盘：后台同步和浮窗都还活着
+  closeToTray: true,
   themeMode: 'system'
 }
 
@@ -378,10 +387,15 @@ function createWindow(): void {
   // 关闭 = 收进托盘（真退出走托盘菜单或 before-quit）
   mainWindow.on('close', (e) => {
     remember()
-    if (!isQuitting) {
-      e.preventDefault()
-      hideAllWindows()
+    if (isQuitting) return
+    if (!state.closeToTray) {
+      // 设置里关掉"关闭进托盘"后，点关闭就是退出
+      isQuitting = true
+      app.quit()
+      return
     }
+    e.preventDefault()
+    hideAllWindows()
   })
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -725,148 +739,103 @@ ipcMain.handle('sync:get-state', () => {
     deviceId: id.deviceId,
     deviceName: id.deviceName,
     accountId: id.accountId,
+    username: id.username ?? '',
     paired: isPaired(id)
   }
 })
 
 /* 同上：saveSyncServer 直接读 res.serverUrl，不能包信封 */
 ipcMain.handle('sync:set-server', (_e, url: string, deviceName: string) => {
+  const before = identityOf()
+  const nextUrl = url.trim().replace(/\/$/, '')
+  // 换服务器等于换账号：旧账号在另一台服务器上，这里先退出登录
+  const changed = nextUrl !== before.serverUrl
   const id = ensureIdentity(app.getPath('userData'), {
-    // 地址留空 = 用默认服务器
-    serverUrl: url.trim().replace(/\/$/, ''),
+    serverUrl: nextUrl,
     deviceName: deviceName.trim() || undefined
   })
-  return { serverUrl: id.serverUrl, deviceName: id.deviceName, paired: isPaired(id) }
+  if (changed && id.accountId) {
+    const cleared: StoredIdentity = { ...id, accountId: '', username: '' }
+    saveIdentity(app.getPath('userData'), cleared)
+    broadcastDataChanged()
+    return {
+      serverUrl: cleared.serverUrl,
+      deviceName: cleared.deviceName,
+      paired: false,
+      loggedOut: true
+    }
+  }
+  return { serverUrl: id.serverUrl, deviceName: id.deviceName, paired: isPaired(id), loggedOut: false }
 })
 
-/** 首次建账号：这台电脑就是账号的第一个设备 */
-ipcMain.handle('sync:create-account', async (_e, invite: string, accountName: string) => {
+/* ------------------------------ 账号 ------------------------------ */
+
+function saveAccount(id: StoredIdentity, accountId: string, username: string): StoredIdentity {
+  const next: StoredIdentity = { ...id, accountId, username }
+  saveIdentity(app.getPath('userData'), next)
+  broadcastDataChanged()
+  return next
+}
+
+/** 注册：建账号 + 这台电脑成为首台设备 */
+ipcMain.handle(
+  'sync:register',
+  async (_e, input: { username: string; password: string; invite?: string }) => {
+    try {
+      const id = identityOf()
+      if (!id.serverUrl) return { ok: false, error: '先填服务器地址' }
+      const res = await registerAccount(id, input)
+      saveAccount(id, res.accountId, res.username)
+      return { ok: true, data: res }
+    } catch (err) {
+      return { ok: false, error: (err as Error).message }
+    }
+  }
+)
+
+/** 登录：任意设备登录同一账号，就绑到同一份数据上 */
+ipcMain.handle('sync:login', async (_e, input: { username: string; password: string }) => {
   try {
     const id = identityOf()
     if (!id.serverUrl) return { ok: false, error: '先填服务器地址' }
-    const { accountId } = await createAccount(id, {
-      invite: invite.trim(),
-      accountName: accountName.trim()
-    })
-    const saved: StoredIdentity = { ...id, accountId }
-    saveIdentity(app.getPath('userData'), saved)
-    broadcastDataChanged()
-    return { ok: true, data: { accountId } }
+    const res = await loginAccount(id, input)
+    saveAccount(id, res.accountId, res.username)
+    return { ok: true, data: res }
   } catch (err) {
     return { ok: false, error: (err as Error).message }
   }
 })
 
-/** 二维码里的内容：地址 + 配对信息（配对码 + pairId） */
-ipcMain.handle('sync:pair-start', async () => {
+/** 认领：配对时代的老账号还没有用户名密码，用现有凭据设一次 */
+ipcMain.handle('sync:claim', async (_e, input: { username: string; password: string }) => {
   try {
     const id = identityOf()
-    if (!isPaired(id)) return { ok: false, error: '本机还没有账号，先创建' }
-    const started = await startPairing(id)
-    return {
-      ok: true,
-      data: {
-        ...started,
-        qr: pairingQrText({
-          v: 1,
-          u: id.serverUrl,
-          p: started.pairId,
-          c: started.code
-        })
-      }
-    }
+    if (!id.accountId) return { ok: false, error: '本机还没有账号' }
+    const res = await claimAccount(id, input)
+    saveAccount(id, res.accountId, res.username)
+    return { ok: true, data: res }
   } catch (err) {
     return { ok: false, error: (err as Error).message }
   }
 })
 
-/**
- * 新设备扫码后加入：提交自己的身份，等已授权设备批准。
- * 桌面端也能用这个通道（比如给第二台电脑配对）。
- */
-ipcMain.handle('sync:pair-join', async (_e, payloadText: string) => {
+ipcMain.handle('sync:logout', async () => {
+  const id = identityOf()
   try {
-    const parsed = parsePairingQr(payloadText)
-    if (!parsed) return { ok: false, error: '二维码内容不对' }
-    const base = parsed.u.replace(/\/$/, '')
-    const id = ensureIdentity(app.getPath('userData'), { serverUrl: base })
-    const res = await fetch(`${base}/pair/join`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        pairId: parsed.p,
-        code: parsed.c,
-        deviceId: id.deviceId,
-        accountSecret: id.deviceSecret,
-        deviceName: id.deviceName
-      }),
-      signal: AbortSignal.timeout(20000)
-    })
-    if (!res.ok) return { ok: false, error: `HTTP ${res.status}: ${(await res.text()).slice(0, 160)}` }
-    return await pairStatusOf(base, parsed, id)
-  } catch (err) {
-    return { ok: false, error: (err as Error).message }
+    await logoutDevice(id)
+  } catch {
+    /* 断网也要能退出本机 */
   }
+  const next: StoredIdentity = { ...id, accountId: '', username: '' }
+  saveIdentity(app.getPath('userData'), next)
+  broadcastDataChanged()
+  return { ok: true, data: { loggedOut: true } }
 })
 
-/**
- * 查这次配对的状态（不重复提交 join）。
- * 批准后服务端给出 accountId，这时把这台设备正式记进账号。
- */
-ipcMain.handle('sync:pair-status', async (_e, payloadText: string) => {
+ipcMain.handle('sync:me', async () => {
   try {
-    const parsed = parsePairingQr(payloadText)
-    if (!parsed) return { ok: false, error: '二维码内容不对' }
-    const base = parsed.u.replace(/\/$/, '')
-    const id = ensureIdentity(app.getPath('userData'), { serverUrl: base })
-    return await pairStatusOf(base, parsed, id)
-  } catch (err) {
-    return { ok: false, error: (err as Error).message }
-  }
-})
-
-/** 查配对状态；批准时把 accountId 落盘 */
-async function pairStatusOf(
-  base: string,
-  parsed: { p: string; c: string },
-  id: StoredIdentity
-): Promise<{ ok: true; data: { status: string } } | { ok: false; error: string }> {
-  const st = await fetch(
-    `${base}/pair/status?pairId=${encodeURIComponent(parsed.p)}` +
-      `&deviceId=${encodeURIComponent(id.deviceId)}&code=${encodeURIComponent(parsed.c)}`,
-    { signal: AbortSignal.timeout(20000) }
-  )
-  const body = (await st.json()) as { status?: string; accountId?: string }
-  const status = body.status ?? 'pending'
-  if (status === 'approved' && body.accountId && id.accountId !== body.accountId) {
-    saveIdentity(app.getPath('userData'), { ...id, accountId: body.accountId })
-    broadcastDataChanged()
-  }
-  return { ok: true, data: { status } }
-}
-
-ipcMain.handle('sync:pair-pending', async (_e, pairId: string) => {
-  try {
-    const list = await listPendingDevices(identityOf(), pairId)
-    return { ok: true, data: list }
-  } catch (err) {
-    return { ok: false, error: (err as Error).message }
-  }
-})
-
-ipcMain.handle('sync:pair-approve', async (_e, pairId: string, deviceId: string) => {
-  try {
-    await approveDevice(identityOf(), pairId, deviceId)
-    return { ok: true, data: true }
-  } catch (err) {
-    return { ok: false, error: (err as Error).message }
-  }
-})
-
-ipcMain.handle('sync:pair-reject', async (_e, pairId: string, deviceId: string) => {
-  try {
-    await rejectDevice(identityOf(), pairId, deviceId)
-    return { ok: true, data: true }
+    const info = await accountInfo(identityOf())
+    return { ok: true, data: info }
   } catch (err) {
     return { ok: false, error: (err as Error).message }
   }
@@ -913,7 +882,8 @@ ipcMain.handle('window:is-maximized', () => mainWindow?.isMaximized() ?? false)
 ipcMain.handle('settings:get', () => ({
   miniVisible: state.miniVisible,
   miniPinned: state.miniPinned,
-  autoStart: state.autoStart
+  autoStart: state.autoStart,
+  closeToTray: state.closeToTray
 }))
 
 ipcMain.handle('settings:set-auto-start', (_e, on: boolean) => {
@@ -921,6 +891,12 @@ ipcMain.handle('settings:set-auto-start', (_e, on: boolean) => {
   persistState()
   applyAutoStart()
   return state.autoStart
+})
+
+ipcMain.handle('settings:set-close-to-tray', (_e, on: boolean) => {
+  state.closeToTray = Boolean(on)
+  persistState()
+  return state.closeToTray
 })
 
 ipcMain.handle('mini:set-visible', (_e, visible: boolean) => {

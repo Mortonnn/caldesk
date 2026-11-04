@@ -1232,6 +1232,126 @@ textarea {
   opacity: 0.6;
 }
 
+/* ------------------------------ 启动占位 ------------------------------ */
+
+/* 与 index.html 里的内联启动画面同形：蓝底圆角方块 + 白色标记 */
+.m-boot {
+  display: grid;
+  place-items: center;
+}
+
+.m-boot-tile {
+  width: 76px;
+  height: 76px;
+  border-radius: 18px;
+  background: var(--m-accent);
+  color: #ffffff;
+  display: grid;
+  place-items: center;
+  box-shadow: 0 12px 32px rgba(17, 22, 30, 0.18);
+}
+
+@media (prefers-color-scheme: dark) {
+  .m-boot-tile {
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  }
+}
+
+/* ------------------------------ 登录 / 注册 ------------------------------ */
+
+.m-auth-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 12px;
+  background: var(--m-surface-2);
+  margin-bottom: 6px;
+}
+
+.m-auth-tab {
+  flex: 1;
+  height: 36px;
+  border-radius: 9px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--m-text-3);
+  transition: background var(--m-t-fast) var(--m-ease-out), color var(--m-t-fast) var(--m-ease-out);
+}
+
+.m-auth-tab.on {
+  background: var(--m-surface);
+  color: var(--m-text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.m-auth-link {
+  align-self: flex-start;
+  margin: -2px 0 10px;
+  padding: 2px 0;
+  font-size: 12.5px;
+  color: var(--m-accent);
+}
+
+/* ------------------------------ 设置里的小控件 ------------------------------ */
+
+.m-set-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.m-set-input {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid var(--m-stroke);
+  background: var(--m-surface-2);
+  padding: 0 12px;
+  font-size: 14px;
+  outline: none;
+}
+
+.m-set-input:focus {
+  border-color: var(--m-accent);
+}
+
+.m-side-btn.danger {
+  color: var(--m-danger);
+  border-color: var(--m-danger);
+}
+
+.m-icon-mini {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--m-text-3);
+}
+
+.m-icon-mini svg {
+  width: 16px;
+  height: 16px;
+}
+
+.m-icon-mini:disabled {
+  opacity: 0.3;
+}
+
+.m-icon-mini:active {
+  background: var(--m-surface-2);
+  color: var(--m-danger);
+}
+
+.m-confirm-row {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
 /* ------------------------------ 减少动态 ------------------------------ */
 
 @media (prefers-reduced-motion: reduce) {

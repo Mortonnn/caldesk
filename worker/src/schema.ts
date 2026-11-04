@@ -73,7 +73,38 @@ export async function ensureSchema(db: D1Like): Promise<void> {
     await db.prepare(sql).run()
   }
   await migrateRowsPrimaryKey(db)
+  await ensureAccountColumns(db)
   ready = true
+}
+
+/**
+ * 账号密码登录替代了旧的配对流程：accounts 需要补上凭据列。
+ *
+ * D1/SQLite 的 ALTER TABLE 没有 IF NOT EXISTS，只能先 PRAGMA 看现有列再补，
+ * 这样老库（只有 id/name/encrypted/created_at）也能平滑升级，已有账号的
+ * rows 数据一行不动 —— 老设备用现有凭据调 /auth/claim 设一次用户名密码即可。
+ */
+const ACCOUNT_COLUMNS: Array<[string, string]> = [
+  ['username', 'TEXT'],
+  ['username_key', 'TEXT'],
+  ['password_hash', 'TEXT'],
+  ['password_salt', 'TEXT'],
+  ['password_iters', 'INTEGER'],
+  ['updated_at', 'INTEGER']
+]
+
+async function ensureAccountColumns(db: D1Like): Promise<void> {
+  const { results } = await db.prepare('PRAGMA table_info(accounts)').all<{ name: string }>()
+  const have = new Set((results ?? []).map((r) => r.name))
+  for (const [name, type] of ACCOUNT_COLUMNS) {
+    if (!have.has(name)) {
+      await db.prepare(`ALTER TABLE accounts ADD COLUMN ${name} ${type}`).run()
+    }
+  }
+  // 用户名大小写不敏感地唯一；空值（老账号还没 claim）允许重复
+  await db
+    .prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_username ON accounts (username_key)')
+    .run()
 }
 
 /**

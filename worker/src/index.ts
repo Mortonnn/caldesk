@@ -2,17 +2,19 @@
  * caldesk-sync — Cloudflare Worker + D1
  *
  * 安全模型：
- * 1. 每台设备一套凭据：随机 32 字节 secret，客户端以
- *    `Authorization: Bearer <deviceId>.<secretHex>` 发送。
- *    服务端只存 sha256(salt || secretHex)，salt 每设备随机 16 字节，
- *    比对走定长常量时间循环，数据库泄露也拿不到可用凭据。
- * 2. 新设备通过二维码配对：已授权设备生成 6 位数字码（5 分钟），
- *    新设备扫码后调 /pair/join（等价于 /pair/request）提交自己的身份 →
- *    状态 pending → 旧设备在 /pair/pending 里看到它并批准 → approved。
- *    二维码里只有 pairId + code，不带任何密钥。
- * 3. 服务端存明文：rows.payload 就是整行的明文 JSON 字符串，
- *    服务端不加解密、也不解析业务字段（同步协议里 payload 是不透明字符串）。
- * 4. 多账号隔离：账号一律由凭据推导（devices.account_id），
+ * 1. 账号 = 用户名 + 密码。密码用 PBKDF2-HMAC-SHA256（120k 次，16 字节随机盐）
+ *    存成 hex，服务端不存明文；比对走常量时间循环。
+ *    `accounts.username_key` 是去空白 + 忽略大小写的唯一键。
+ * 2. 登录成功后，客户端拿到的仍是「每设备一套凭据」：
+ *    `Authorization: Bearer <deviceId>.<secretHex>`，服务端只存
+ *    sha256(salt || secretHex)。设备凭据与账号密码是两层：
+ *    密码用于“这台设备属于哪个账号”，设备凭据用于后续每一次请求。
+ *    任意设备登录同一账号，就绑定到同一个 account_id —— 不需要配对码。
+ * 3. 老账号（配对时代创建、没有用户名密码）用当前设备凭据调 /auth/claim
+ *    设一次用户名密码即可，rows 里的数据一行不动。
+ * 4. 服务端存明文：rows.payload 就是整行的明文 JSON 字符串，
+ *    服务端不解密、也不解析业务字段（同步协议里 payload 是不透明字符串）。
+ * 5. 多账号隔离：账号一律由凭据推导（devices.account_id），
  *    永远不信任请求体里的 accountId / account_id。
  *    REST 接口（/api/*）同样按账号过滤与写入。
  *
@@ -44,6 +46,11 @@ const ONLINE_WINDOW_MS = 5 * 60 * 1000
 const SECRET_HEX_LEN = 64
 const SALT_BYTES = 16
 
+/* 账号密码：PBKDF2-HMAC-SHA256，迭代次数写在账号行里，以后调高不会让老密码失效 */
+const PBKDF2_ITERS = 120_000
+const PASSWORD_MIN = 10
+const USERNAME_MAX = 64
+
 /**
  * CORS：Capacitor/浏览器里的页面来源是 https://localhost 或 file://，
  * 跨域访问会带 Authorization 头 → 触发预检。这里统一放行。
@@ -51,7 +58,7 @@ const SALT_BYTES = 16
  */
 const CORS_HEADERS: Record<string, string> = {
   'access-control-allow-origin': '*',
-  'access-control-allow-headers': 'authorization, content-type',
+  'access-control-allow-headers': 'authorization, content-type, x-device-name',
   'access-control-allow-methods': 'GET, POST, OPTIONS',
   'access-control-max-age': '86400'
 }
@@ -103,6 +110,133 @@ function timingSafeEqual(a: string, b: string): boolean {
     diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
   }
   return diff === 0
+}
+
+/* ------------------------------ 账号密码 ------------------------------ */
+
+function hexToBytes(hex: string): Uint8Array {
+  const out = new Uint8Array(hex.length / 2)
+  for (let i = 0; i < out.length; i += 1) {
+    out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16)
+  }
+  return out
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  let out = ''
+  for (const b of bytes) out += b.toString(16).padStart(2, '0')
+  return out
+}
+
+/** PBKDF2-SHA256 → 32 字节 hex；迭代次数存在账号行里，升级不影响老密码 */
+async function pbkdf2Hex(password: string, saltHex: string, iterations: number): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(password),
+    'PBKDF2',
+    false,
+    ['deriveBits']
+  )
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt: hexToBytes(saltHex), iterations, hash: 'SHA-256' },
+    key,
+    256
+  )
+  return bytesToHex(new Uint8Array(bits))
+}
+
+/** 用户名比较键：去空白 + 忽略大小写，保证 Alice 与 alice 是同一个账号 */
+function usernameKeyOf(username: string): string {
+  return username.trim().toLocaleLowerCase()
+}
+
+function checkUsername(username: string): string | null {
+  const name = username.trim()
+  if (name.length < 1 || name.length > USERNAME_MAX) {
+    return `用户名长度需在 1–${USERNAME_MAX} 个字符之间`
+  }
+  // 不允许控制字符；空格也只能出现在中间（首尾已 trim）
+  if (/[\u0000-\u001f\u007f]/.test(name)) return '用户名含有不可见字符'
+  return null
+}
+
+/** 密码策略：至少 10 位，且数字、大写、小写、符号各至少一个 */
+function checkPassword(password: string): string | null {
+  if (password.length < PASSWORD_MIN) return `密码至少 ${PASSWORD_MIN} 位`
+  if (password.length > 200) return '密码太长'
+  if (!/[0-9]/.test(password)) return '密码需要包含数字'
+  if (!/[a-z]/.test(password)) return '密码需要包含小写字母'
+  if (!/[A-Z]/.test(password)) return '密码需要包含大写字母'
+  if (!/[^A-Za-z0-9]/.test(password)) return '密码需要包含符号'
+  return null
+}
+
+interface AccountAuthRow {
+  id: string
+  username: string | null
+  username_key: string | null
+  password_hash: string | null
+  password_salt: string | null
+  password_iters: number | null
+}
+
+async function accountByUsername(env: Env, key: string): Promise<AccountAuthRow | null> {
+  return await firstRow<AccountAuthRow>(
+    env,
+    `SELECT id, username, username_key, password_hash, password_salt, password_iters
+       FROM accounts WHERE username_key = ?`,
+    key
+  )
+}
+
+async function accountById(env: Env, id: string): Promise<AccountAuthRow | null> {
+  return await firstRow<AccountAuthRow>(
+    env,
+    `SELECT id, username, username_key, password_hash, password_salt, password_iters
+       FROM accounts WHERE id = ?`,
+    id
+  )
+}
+
+/**
+ * 把一台设备挂到账号下（登录 / 注册都走这里）。
+ * 设备凭据仍由客户端生成，服务端只存哈希；同一 deviceId 属于别的账号时拒绝，
+ * 防止一台设备的本地身份被另一个账号悄悄接管。
+ */
+async function bindDevice(
+  env: Env,
+  accountId: string,
+  deviceId: string,
+  deviceName: string,
+  secret: string
+): Promise<Response | null> {
+  const existing = await firstRow<{ account_id: string }>(
+    env,
+    'SELECT account_id FROM devices WHERE device_id = ?',
+    deviceId
+  )
+  if (existing && existing.account_id !== accountId) {
+    return fail(409, 'device_conflict', '这台设备的身份属于另一个账号，请先在设置里退出登录')
+  }
+  const { salt, hash } = await makeCredential(secret)
+  const now = Date.now()
+  if (existing) {
+    await env.DB.prepare(
+      `UPDATE devices SET name = ?, secret_salt = ?, secret_hash = ?, status = 'approved', last_seen_at = ?
+        WHERE device_id = ?`
+    )
+      .bind(deviceName, salt, hash, now, deviceId)
+      .run()
+  } else {
+    await env.DB.prepare(
+      `INSERT INTO devices
+         (device_id, account_id, name, secret_salt, secret_hash, status, created_at, last_seen_at, last_ip)
+       VALUES (?, ?, ?, ?, ?, 'approved', ?, ?, NULL)`
+    )
+      .bind(deviceId, accountId, deviceName, salt, hash, now, now)
+      .run()
+  }
+  return null
 }
 
 /** 6 位数字配对码，左侧补零 */
@@ -182,11 +316,21 @@ async function authenticate(req: Request, env: Env): Promise<AuthedDevice | null
   return { deviceId, accountId: device.account_id }
 }
 
-/** 每个通过鉴权的请求都刷新设备活跃时间（在线数就靠它） */
+/**
+ * 每个通过鉴权的请求都刷新设备活跃时间（在线数就靠它）。
+ *
+ * 顺带接收客户端报上来的设备名：老设备的"这台手机"在本地改名之后，
+ * 下一次请求就会把新名字（型号_月日时）写回服务端，不用重新登录。
+ */
 async function touchDevice(req: Request, env: Env, deviceId: string): Promise<void> {
   const ip = req.headers.get('cf-connecting-ip')
-  await env.DB.prepare('UPDATE devices SET last_seen_at = ?, last_ip = ? WHERE device_id = ?')
-    .bind(Date.now(), ip && ip.length > 0 ? ip : null, deviceId)
+  const reported = (req.headers.get('x-device-name') ?? '').trim().slice(0, 80)
+  await env.DB.prepare(
+    `UPDATE devices
+        SET last_seen_at = ?, last_ip = ?, name = COALESCE(NULLIF(?, ''), name)
+      WHERE device_id = ?`
+  )
+    .bind(Date.now(), ip && ip.length > 0 ? ip : null, reported, deviceId)
     .run()
 }
 
@@ -231,15 +375,12 @@ async function handle(req: Request, env: Env): Promise<Response> {
 
   /* -------------------- 公开接口（无需凭据） -------------------- */
 
-  if (url.pathname === '/account/create' && req.method === 'POST') {
-    return await createAccount(req, env)
+  // 账号密码：注册即建账号 + 绑一台设备；登录即把当前设备绑到已有账号
+  if (url.pathname === '/auth/register' && req.method === 'POST') {
+    return await registerAccount(req, env)
   }
-  // /pair/join 与 /pair/request 等价：手机扫码后提交自己的身份
-  if ((url.pathname === '/pair/join' || url.pathname === '/pair/request') && req.method === 'POST') {
-    return await joinPairing(req, env)
-  }
-  if (url.pathname === '/pair/status' && req.method === 'GET') {
-    return await pairingStatus(url, env)
+  if (url.pathname === '/auth/login' && req.method === 'POST') {
+    return await loginAccount(req, env)
   }
 
   /* -------------------- 以下全部要求设备凭据 -------------------- */
@@ -248,10 +389,16 @@ async function handle(req: Request, env: Env): Promise<Response> {
   if (!auth) return fail(401, 'unauthorized', '设备凭据无效或未获批准')
   await touchDevice(req, env, auth.deviceId)
 
-  if (url.pathname === '/pair/start' && req.method === 'POST') return await startPairing(env, auth)
-  if (url.pathname === '/pair/pending' && req.method === 'GET') return await listPending(url, env, auth)
-  if (url.pathname === '/pair/approve' && req.method === 'POST') return await approvePairing(req, env, auth)
-  if (url.pathname === '/pair/reject' && req.method === 'POST') return await rejectPairing(req, env, auth)
+  // 老账号（配对时代创建、还没有用户名密码）用现有凭据认领一次
+  if (url.pathname === '/auth/claim' && req.method === 'POST') {
+    return await claimAccount(req, env, auth)
+  }
+  if (url.pathname === '/auth/me' && req.method === 'GET') {
+    return await accountInfo(env, auth)
+  }
+  if (url.pathname === '/auth/logout' && req.method === 'POST') {
+    return await logoutDevice(env, auth)
+  }
 
   if (url.pathname === '/devices' && req.method === 'GET') return await listDevices(env, auth)
   if (url.pathname === '/devices/revoke' && req.method === 'POST') return await revokeDevice(req, env, auth)
@@ -268,69 +415,181 @@ async function handle(req: Request, env: Env): Promise<Response> {
   return json({ error: 'not found' }, 404)
 }
 
-/* ------------------------------ 账号 ------------------------------ */
+/* ------------------------------ 账号密码 ------------------------------ */
 
 /**
- * 注册账号 + 首台设备（owner，直接 approved）。
- * INSTANCE_INVITE 设置时是单租户私有部署，必须带对邀请码；
- * 不设置则允许任意人自建（BYO）。
+ * 注册：建账号 + 把当前设备挂上去，直接 approved。
+ * 设备凭据由客户端生成（deviceId + 64 位 hex secret），服务端只存哈希。
  */
-async function createAccount(req: Request, env: Env): Promise<Response> {
+async function registerAccount(req: Request, env: Env): Promise<Response> {
   const body = await readJson(req)
   if (!body) return fail(400, 'bad_json', '请求体不是合法 JSON')
 
-  if (env.INSTANCE_INVITE) {
-    const invite = str(body.invite)
-    if (!timingSafeEqual(invite, env.INSTANCE_INVITE)) return fail(403, 'invalid_invite', '邀请码不正确')
-  }
-
+  const username = str(body.username).trim()
+  const password = str(body.password)
   const deviceId = str(body.deviceId).trim()
-  const accountSecret = str(body.accountSecret).trim()
-  const accountName = str(body.accountName).trim()
-  const deviceName = str(body.deviceName).trim()
-  if (!deviceId) return fail(400, 'missing_device_id', '缺少 deviceId')
-  if (!isHex(accountSecret, SECRET_HEX_LEN)) {
-    return fail(400, 'invalid_secret', `accountSecret 必须是 ${SECRET_HEX_LEN} 位 hex`)
+  const secret = str(body.secret).trim()
+  const deviceName = str(body.deviceName).trim() || '未命名设备'
+
+  // 私有部署可以设置 INSTANCE_INVITE 限制注册（公开部署不设即可）
+  if (env.INSTANCE_INVITE) {
+    const invite = str(body.invite).trim()
+    if (!timingSafeEqual(invite, env.INSTANCE_INVITE)) {
+      return fail(403, 'invalid_invite', '邀请码不正确')
+    }
   }
 
-  const existing = await firstRow<{ device_id: string }>(
-    env,
-    'SELECT device_id FROM devices WHERE device_id = ?',
-    deviceId
-  )
-  if (existing) return fail(409, 'device_exists', '该设备已注册')
+  const nameError = checkUsername(username)
+  if (nameError) return fail(400, 'invalid_username', nameError)
+  const passwordError = checkPassword(password)
+  if (passwordError) return fail(400, 'weak_password', passwordError)
+  if (!deviceId) return fail(400, 'missing_device_id', '缺少 deviceId')
+  if (!isHex(secret, SECRET_HEX_LEN)) {
+    return fail(400, 'invalid_secret', `secret 必须是 ${SECRET_HEX_LEN} 位 hex`)
+  }
+
+  const key = usernameKeyOf(username)
+  if (await accountByUsername(env, key)) {
+    return fail(409, 'username_taken', '这个用户名已被占用')
+  }
 
   const accountId = crypto.randomUUID()
   const now = Date.now()
-  const { salt, hash } = await makeCredential(accountSecret)
+  const salt = randomHex(SALT_BYTES)
+  const hash = await pbkdf2Hex(password, salt, PBKDF2_ITERS)
 
   try {
-    await env.DB.batch([
-      // 服务端存明文，accounts 表不再有 encrypted 语义
-      env.DB.prepare('INSERT INTO accounts (id, name, created_at) VALUES (?, ?, ?)').bind(
-        accountId,
-        accountName,
-        now
-      ),
-      env.DB.prepare(
-        `INSERT INTO devices
-           (device_id, account_id, name, secret_salt, secret_hash, status, created_at, last_seen_at, last_ip)
-         VALUES (?, ?, ?, ?, ?, 'approved', ?, NULL, NULL)`
-      ).bind(deviceId, accountId, deviceName, salt, hash, now)
-    ])
-  } catch (err) {
-    // 并发注册同一 deviceId 时唯一键会先炸，这里翻译成 409
-    const again = await firstRow<{ device_id: string }>(
-      env,
-      'SELECT device_id FROM devices WHERE device_id = ?',
-      deviceId
+    await env.DB.prepare(
+      `INSERT INTO accounts
+         (id, name, created_at, username, username_key, password_hash, password_salt, password_iters, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    if (again) return fail(409, 'device_exists', '该设备已注册')
-    throw err
+      .bind(accountId, username, now, username, key, hash, salt, PBKDF2_ITERS, now)
+      .run()
+  } catch {
+    // 并发注册同名：唯一索引先炸
+    if (await accountByUsername(env, key)) {
+      return fail(409, 'username_taken', '这个用户名已被占用')
+    }
+    throw new Error('账号创建失败')
   }
 
-  return json({ accountId })
+  const bindError = await bindDevice(env, accountId, deviceId, deviceName, secret)
+  if (bindError) {
+    // 设备冲突：把刚建的账号收回，避免留下没有设备的空账号
+    await env.DB.prepare('DELETE FROM accounts WHERE id = ?').bind(accountId).run()
+    return bindError
+  }
+
+  return json({ accountId, username })
 }
+
+/** 登录：校验密码，然后把当前设备挂到该账号（任意设备登录同一账号即同步） */
+async function loginAccount(req: Request, env: Env): Promise<Response> {
+  const body = await readJson(req)
+  if (!body) return fail(400, 'bad_json', '请求体不是合法 JSON')
+
+  const username = str(body.username).trim()
+  const password = str(body.password)
+  const deviceId = str(body.deviceId).trim()
+  const secret = str(body.secret).trim()
+  const deviceName = str(body.deviceName).trim() || '未命名设备'
+
+  if (!username || !password) return fail(400, 'missing_fields', '请填写用户名和密码')
+  if (!deviceId) return fail(400, 'missing_device_id', '缺少 deviceId')
+  if (!isHex(secret, SECRET_HEX_LEN)) {
+    return fail(400, 'invalid_secret', `secret 必须是 ${SECRET_HEX_LEN} 位 hex`)
+  }
+
+  const account = await accountByUsername(env, usernameKeyOf(username))
+  if (!account?.password_hash || !account.password_salt) {
+    return fail(401, 'bad_credentials', '用户名或密码不正确')
+  }
+  const hash = await pbkdf2Hex(
+    password,
+    account.password_salt,
+    account.password_iters ?? PBKDF2_ITERS
+  )
+  if (!timingSafeEqual(hash, account.password_hash)) {
+    return fail(401, 'bad_credentials', '用户名或密码不正确')
+  }
+
+  const bindError = await bindDevice(env, account.id, deviceId, deviceName, secret)
+  if (bindError) return bindError
+
+  return json({ accountId: account.id, username: account.username ?? username })
+}
+
+/**
+ * 认领：配对时代建的账号还没有用户名密码，用现有设备凭据设一次。
+ * 只允许在没有凭据的账号上执行，避免被人用旧设备悄悄改掉密码。
+ */
+async function claimAccount(req: Request, env: Env, auth: AuthedDevice): Promise<Response> {
+  const body = await readJson(req)
+  if (!body) return fail(400, 'bad_json', '请求体不是合法 JSON')
+
+  const username = str(body.username).trim()
+  const password = str(body.password)
+  const nameError = checkUsername(username)
+  if (nameError) return fail(400, 'invalid_username', nameError)
+  const passwordError = checkPassword(password)
+  if (passwordError) return fail(400, 'weak_password', passwordError)
+
+  const account = await accountById(env, auth.accountId)
+  if (!account) return fail(404, 'account_missing', '账号不存在')
+  if (account.password_hash) return fail(409, 'already_claimed', '这个账号已经有用户名密码了')
+
+  const key = usernameKeyOf(username)
+  const salt = randomHex(SALT_BYTES)
+  const hash = await pbkdf2Hex(password, salt, PBKDF2_ITERS)
+  try {
+    await env.DB.prepare(
+      `UPDATE accounts
+          SET username = ?, username_key = ?, password_hash = ?, password_salt = ?, password_iters = ?, updated_at = ?
+        WHERE id = ?`
+    )
+      .bind(username, key, hash, salt, PBKDF2_ITERS, Date.now(), auth.accountId)
+      .run()
+  } catch {
+    if (await accountByUsername(env, key)) {
+      return fail(409, 'username_taken', '这个用户名已被占用')
+    }
+    throw new Error('账号认领失败')
+  }
+  return json({ accountId: auth.accountId, username })
+}
+
+/** 当前账号信息：设置页用来显示“登录的是谁” */
+async function accountInfo(env: Env, auth: AuthedDevice): Promise<Response> {
+  const account = await accountById(env, auth.accountId)
+  const device = await firstRow<{ name: string }>(
+    env,
+    'SELECT name FROM devices WHERE device_id = ?',
+    auth.deviceId
+  )
+  return json({
+    accountId: auth.accountId,
+    username: account?.username ?? '',
+    claimed: Boolean(account?.password_hash),
+    deviceId: auth.deviceId,
+    deviceName: device?.name ?? ''
+  })
+}
+
+/** 退出登录：只撤销当前这台设备，别的设备不受影响 */
+async function logoutDevice(env: Env, auth: AuthedDevice): Promise<Response> {
+  await env.DB.prepare(`UPDATE devices SET status = 'revoked' WHERE device_id = ?`)
+    .bind(auth.deviceId)
+    .run()
+  return json({ ok: true })
+}
+
+/* ------------------------------ 配对（已废弃） ------------------------------ */
+
+/**
+ * 配对接口不再挂路由：账号密码登录已经取代它。
+ * 这组函数与 pairings 表保留，是为了老部署升级时还能回滚，下个大版本删掉。
+ */
 
 /* ------------------------------ 配对 ------------------------------ */
 

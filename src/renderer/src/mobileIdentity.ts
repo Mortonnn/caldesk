@@ -9,6 +9,8 @@
  *  - 服务端存明文，所以没有账号密钥这一层。
  */
 
+import { PLACEHOLDER_DEVICE_NAMES, defaultDeviceName } from '@shared/identity'
+
 /** localStorage 里身份文件的键 */
 export const IDENTITY_KEY = 'caldesk.identity'
 
@@ -32,6 +34,22 @@ export interface MobileIdentity {
   deviceSecret: string
   deviceName: string
   serverUrl: string
+  /** 登录用的用户名（配对时代的老身份没有） */
+  username?: string
+}
+
+/** 浏览器/WebView 的机型：UA 里的 Android 型号，拿不到就 unknown */
+export function deviceModelName(): string {
+  const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent
+  const m = /Android[^;]*;\s*([^;)]+?)(?:\s+Build\/|\))/i.exec(ua)
+  const model = m?.[1]?.trim().replace(/\s+/g, '')
+  if (model && model.toLowerCase() !== 'wv') return model
+  return 'unknown'
+}
+
+/** 手机默认设备名：型号_月日时，例如 24129PN74C_110413 */
+export function autoDeviceName(now = new Date()): string {
+  return defaultDeviceName(deviceModelName(), now)
 }
 
 export function randomHex(bytes: number): string {
@@ -56,13 +74,19 @@ export function loadMobileIdentity(): MobileIdentity | null {
     if (!raw) return null
     const parsed = JSON.parse(raw) as Partial<MobileIdentity>
     if (!parsed.deviceId || !parsed.deviceSecret) return null
-    return {
+    const stored = (parsed.deviceName ?? '').trim()
+    // 老的"这台手机"没有区分度：第一次读到就换成 型号_月日时
+    const deviceName = stored && !PLACEHOLDER_DEVICE_NAMES.has(stored) ? stored : autoDeviceName()
+    const id: MobileIdentity = {
       accountId: parsed.accountId ?? '',
       deviceId: parsed.deviceId,
       deviceSecret: parsed.deviceSecret,
-      deviceName: parsed.deviceName ?? '这台手机',
+      deviceName,
+      username: parsed.username,
       serverUrl: parsed.serverUrl?.trim() || DEFAULT_SERVER_URL
     }
+    if (deviceName !== parsed.deviceName) saveMobileIdentity(id)
+    return id
   } catch {
     return null
   }
@@ -94,7 +118,8 @@ export function ensureMobileIdentity(patch: {
     accountId: '',
     deviceId: randomUuid(),
     deviceSecret: randomHex(32),
-    deviceName: patch.deviceName ?? '这台手机',
+    deviceName: patch.deviceName?.trim() || autoDeviceName(),
+    username: '',
     serverUrl: patch.serverUrl?.trim() || DEFAULT_SERVER_URL
   }
   saveMobileIdentity(created)

@@ -1,98 +1,71 @@
 /**
- * 手机端首次配置页：扫二维码 / 输配对码。
+ * 手机端首次进入：账号密码登录 / 注册。
  *
- * 与桌面端的设置面板完全分开：手机用整屏卡片 + 大按钮。
- * 界面尽量少字 —— 能用按钮表达的就不写解释。
+ * 配对码与二维码都去掉了 —— 任何设备登录同一个账号，就同步同一份日历。
+ * 注册时密码走同一套策略（数字 + 大小写 + 符号），并提供"生成强密码"。
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { BarcodeScanner } from './BarcodeScanner'
 import { CalMark } from './icons'
 import { data } from './data'
-import { DEFAULT_SERVER_URL, parsePairText, resolveServerUrl } from './mobileIdentity'
+import { generateStrongPassword } from './password'
+import { DUR, EASE_OUT } from './motion'
+import { DEFAULT_SERVER_URL, resolveServerUrl } from './mobileIdentity'
+
+type Mode = 'login' | 'register'
 
 export function MobileSetup({ onDone }: { onDone: () => void }): React.JSX.Element {
-  const [scanning, setScanning] = useState(false)
+  const [mode, setMode] = useState<Mode>('login')
   const [url, setUrl] = useState('')
-  const [code, setCode] = useState('')
-  const [deviceName, setDeviceName] = useState('我的手机')
-  const [error, setError] = useState<string | null>(null)
-  const [status, setStatus] = useState<string | null>(null)
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [invite, setInvite] = useState('')
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [hint, setHint] = useState<string | null>(null)
 
-  async function join(pairText: string): Promise<void> {
-    setBusy(true)
+  useEffect(() => {
+    void data.sync.getState().then((s) => setUrl(s.serverUrl || ''))
+  }, [])
+
+  async function submit(): Promise<void> {
     setError(null)
-    try {
-      const res = await data.sync.pairJoin(pairText)
-      if (!res.ok) {
-        setError(res.error)
-        return
-      }
-      setStatus('等电脑批准…')
-      for (let i = 0; i < 80; i += 1) {
-        await new Promise((r) => setTimeout(r, 1500))
-        const st = await data.sync.pairStatus(pairText)
-        if (!st.ok) continue
-        if (st.data.status === 'approved') {
-          setStatus('已批准')
-          setTimeout(onDone, 500)
-          return
-        }
-        if (st.data.status === 'rejected' || st.data.status === 'expired') {
-          setError('电脑拒绝了这次配对')
-          setStatus(null)
-          return
-        }
-      }
-      setStatus('还在等电脑批准')
-    } catch (err) {
-      setError((err as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function joinByCode(): Promise<void> {
-    const u = resolveServerUrl(url)
-    if (!/^\d{6}$/.test(code.trim())) {
-      setError('配对码是 6 位数字')
+    setHint(null)
+    const server = resolveServerUrl(url)
+    if (!/^https?:\/\//.test(server)) {
+      setError('先填服务器地址，例如 https://caldesk.workers.dev')
       return
     }
-    void data.sync.setServer(u, deviceName.trim())
-    await join(JSON.stringify({ v: 1, u, p: '', c: code.trim() }))
+    if (!username.trim() || !password) {
+      setError('请填写用户名和密码')
+      return
+    }
+    setBusy(true)
+    // 先记住服务器地址，登录请求才会打到这台服务器
+    await data.sync.setServer(server, '')
+    const res =
+      mode === 'login'
+        ? await data.sync.login({ username: username.trim(), password })
+        : await data.sync.register({
+            username: username.trim(),
+            password,
+            invite: invite.trim()
+          })
+    setBusy(false)
+    if (!res.ok) {
+      setError(res.error)
+      return
+    }
+    setHint(mode === 'login' ? '登录成功' : '账号已创建')
+    setTimeout(onDone, 260)
   }
 
-  if (scanning) {
-    return (
-      <div className="m-setup">
-        <span className="m-setup-mark">
-          <CalMark size={32} />
-        </span>
-        <h1>扫二维码</h1>
-        <div className="m-scanner">
-          <BarcodeScanner
-            onCancel={() => setScanning(false)}
-            onError={(m) => {
-              setError(m)
-              setScanning(false)
-            }}
-            onResult={(text) => {
-              const parsed = parsePairText(text)
-              if (!parsed) {
-                setError('这不是配对二维码')
-                setScanning(false)
-                return
-              }
-              setUrl(parsed.u)
-              void join(text)
-            }}
-          />
-        </div>
-        {status && <p className="m-setup-hint">{status}</p>}
-        {error && <p className="m-setup-error">{error}</p>}
-      </div>
-    )
+  function generate(): void {
+    const pw = generateStrongPassword()
+    setPassword(pw)
+    setError(null)
+    setHint('已生成强密码并复制到剪贴板')
+    void navigator.clipboard?.writeText(pw).catch(() => {})
   }
 
   return (
@@ -100,51 +73,92 @@ export function MobileSetup({ onDone }: { onDone: () => void }): React.JSX.Eleme
       <span className="m-setup-mark">
         <CalMark size={32} />
       </span>
-      <h1>连接你的日历</h1>
-      <p>在电脑端「设置 → 同步」里生成配对码，扫一下就连上了</p>
+      <h1>{mode === 'login' ? '登录 caldesk' : '创建账号'}</h1>
+      <p>
+        {mode === 'login'
+          ? '同一个账号在电脑和手机上读写同一份日历'
+          : '账号建在这台服务器上，其他设备登录同一个账号即可'}
+      </p>
 
-      <button className="m-setup-btn" onClick={() => setScanning(true)}>
-        扫二维码
-      </button>
+      <div className="m-auth-tabs" role="tablist">
+        {(['login', 'register'] as const).map((m) => (
+          <button
+            key={m}
+            role="tab"
+            aria-selected={mode === m}
+            className={`m-auth-tab ${mode === m ? 'on' : ''}`}
+            onClick={() => {
+              setMode(m)
+              setError(null)
+              setHint(null)
+            }}
+          >
+            {m === 'login' ? '登录' : '注册'}
+          </button>
+        ))}
+      </div>
 
-      <div className="m-setup-divider">或</div>
-
-      <label className="m-setup-label">配对码</label>
-      <input
-        className="m-setup-input m-setup-code"
-        placeholder="6 位数字"
-        inputMode="numeric"
-        value={code}
-        onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-      />
-
-      <label className="m-setup-label">设备名</label>
+      <label className="m-setup-label">用户名</label>
       <input
         className="m-setup-input"
-        value={deviceName}
-        onChange={(e) => setDeviceName(e.target.value)}
+        value={username}
+        autoCapitalize="none"
+        autoCorrect="off"
+        autoComplete="username"
+        onChange={(e) => setUsername(e.target.value)}
       />
+
+      <label className="m-setup-label">密码</label>
+      <input
+        className="m-setup-input"
+        type="password"
+        value={password}
+        autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+        onChange={(e) => setPassword(e.target.value)}
+      />
+      <button className="m-auth-link" type="button" onClick={generate}>
+        生成强密码（16 位，含大小写、数字、符号）
+      </button>
+
+      {mode === 'register' && (
+        <>
+          <label className="m-setup-label">邀请码（可选）</label>
+          <input
+            className="m-setup-input"
+            value={invite}
+            placeholder="服务器没设置邀请码就留空"
+            onChange={(e) => setInvite(e.target.value)}
+          />
+        </>
+      )}
 
       <label className="m-setup-label">服务器</label>
       <input
         className="m-setup-input"
-        placeholder={DEFAULT_SERVER_URL || 'https://你的-worker.workers.dev'}
         value={url}
+        placeholder={DEFAULT_SERVER_URL || 'https://你的-worker.workers.dev'}
         autoCapitalize="none"
         autoCorrect="off"
+        inputMode="url"
         onChange={(e) => setUrl(e.target.value)}
       />
 
       {error && <p className="m-setup-error">{error}</p>}
-      {status && <p className="m-setup-hint">{status}</p>}
+      {hint && <p className="m-setup-hint">{hint}</p>}
 
-      <button
-        className="m-setup-btn"
-        disabled={busy || code.length !== 6}
-        onClick={() => void joinByCode()}
-      >
-        {busy ? '等待批准…' : '用配对码加入'}
+      <button className="m-setup-btn" disabled={busy} onClick={() => void submit()}>
+        {busy ? '处理中…' : mode === 'login' ? '登录' : '注册并登录'}
       </button>
+
+      <motion.p
+        className="m-setup-hint"
+        key={mode}
+        initial={{ opacity: 0, y: 4 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: DUR.base, ease: EASE_OUT }}
+      >
+        {mode === 'login' ? '没有账号？点上面的「注册」' : '已经有账号？点上面的「登录」'}
+      </motion.p>
     </div>
   )
 }

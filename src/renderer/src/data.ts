@@ -23,7 +23,6 @@ import {
   ensureMobileIdentity,
   isMobilePaired,
   loadMobileIdentity,
-  parsePairText,
   randomHex,
   randomUuid,
   saveMobileIdentity,
@@ -72,7 +71,10 @@ export interface SyncStateResult {
   deviceId: string
   deviceName: string
   accountId: string
+  username: string
   paired: boolean
+  /** 换服务器导致本次被退出登录 */
+  loggedOut?: boolean
 }
 
 const HOST_KEY = 'caldesk.http'
@@ -105,34 +107,18 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
     saveMobileIdentity(mobile)
   }
 
-  /** 查配对状态；批准后把 accountId 存下来（这时这台手机才真正入伙） */
-  async function mobilePairStatus(
-    parsed: { u: string; p: string; c: string }
-  ): Promise<IpcResult<{ status: string }>> {
-    const st = await fetch(
-      `${parsed.u}/pair/status?pairId=${encodeURIComponent(parsed.p)}` +
-        `&deviceId=${encodeURIComponent(mobile.deviceId)}&code=${encodeURIComponent(parsed.c)}`
-    )
-    const body = (await st.json()) as { status?: string; accountId?: string }
-    const status = body.status ?? 'pending'
-    if (status === 'approved' && body.accountId) {
-      mobile.accountId = body.accountId
-      saveMobileIdentity(mobile)
-    }
-    return { ok: true, data: { status } }
-  }
-
   async function req<T>(path: string, init?: RequestInit): Promise<IpcResult<T>> {
     try {
       const res = await fetch(base() + path, {
         ...init,
         headers: {
           authorization: `Bearer ${mobile.deviceId}.${mobile.deviceSecret}`,
+          'x-device-name': mobile.deviceName,
           'content-type': 'application/json',
           ...(init?.headers ?? {})
         }
       })
-      if (res.status === 401) return { ok: false, error: '设备未授权或已被撤销，请重新配对' }
+      if (res.status === 401) return { ok: false, error: '设备未授权或已被撤销，请重新登录' }
       if (!res.ok) {
         const text = await res.text()
         return { ok: false, error: `${res.status}：${text.slice(0, 160)}` }
@@ -145,6 +131,39 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
 
   const post = <T>(path: string, body: unknown): Promise<IpcResult<T>> =>
     req<T>(path, { method: 'POST', body: JSON.stringify(body) })
+
+  const tokenOf = (): string => `Bearer ${mobile.deviceId}.${mobile.deviceSecret}`
+
+  /** 账号接口：注册 / 登录 / 认领 / 退出；错误体里的中文说明直接透出 */
+  async function authCall<T>(path: string, body: unknown, token?: string): Promise<IpcResult<T>> {
+    try {
+      const res = await fetch(base() + path, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(token ? { authorization: token } : {})
+        },
+        body: JSON.stringify(body ?? {})
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        if (res.status === 404) {
+          return { ok: false, error: '服务器版本太旧，还没有账号密码接口，先部署新版 Worker' }
+        }
+        let message = text.slice(0, 160)
+        try {
+          const parsed = JSON.parse(text) as { message?: string; error?: string }
+          message = parsed.message || parsed.error || message
+        } catch {
+          /* 非 JSON 就用原文 */
+        }
+        return { ok: false, error: message }
+      }
+      return { ok: true, data: (await res.json()) as T }
+    } catch (err) {
+      return { ok: false, error: (err as Error).message }
+    }
+  }
 
   /** 远端行 → 本地 DayCell 形状 */
   const toCell = (calendarId: string, row: { date: string; text: string }): DayCell => ({
@@ -169,8 +188,15 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
     },
 
     settings: {
-      get: () => Promise.resolve({ miniVisible: false, miniPinned: false, autoStart: false }),
-      setAutoStart: () => Promise.resolve(false)
+      get: () =>
+        Promise.resolve({
+          miniVisible: false,
+          miniPinned: false,
+          autoStart: false,
+          closeToTray: false
+        }),
+      setAutoStart: () => Promise.resolve(false),
+      setCloseToTray: () => Promise.resolve(false)
     },
 
     calendars: {
@@ -335,83 +361,103 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
         return {
           serverUrl: id?.serverUrl ?? base(),
           deviceId: id?.deviceId ?? '',
-          deviceName: id?.deviceName ?? '这台手机',
+          deviceName: id?.deviceName ?? '',
           accountId: id?.accountId ?? '',
+          username: id?.username ?? '',
           paired: isMobilePaired(id)
         }
       },
       setServer: async (url: string, deviceName: string): Promise<SyncStateResult> => {
-        const id = ensureMobileIdentity({ serverUrl: url.trim(), deviceName })
+        const before = loadMobileIdentity()
+        const next = ensureMobileIdentity({ serverUrl: url.trim(), deviceName })
+        const changed = Boolean(before && before.serverUrl !== next.serverUrl)
+        // 换服务器等于换账号：旧账号在另一台服务器上，先退出登录
+        if (changed && next.accountId) {
+          mobile.accountId = ''
+          mobile.username = ''
+          saveMobileIdentity(mobile)
+          return {
+            serverUrl: mobile.serverUrl,
+            deviceId: mobile.deviceId,
+            deviceName: mobile.deviceName,
+            accountId: '',
+            username: '',
+            paired: false,
+            loggedOut: true
+          }
+        }
         return {
-          serverUrl: id.serverUrl,
-          deviceId: id.deviceId,
-          deviceName: id.deviceName,
-          accountId: id.accountId,
-          paired: isMobilePaired(id)
+          serverUrl: next.serverUrl,
+          deviceId: next.deviceId,
+          deviceName: next.deviceName,
+          accountId: next.accountId,
+          username: next.username ?? '',
+          paired: isMobilePaired(next),
+          loggedOut: false
         }
       },
-      createAccount: async (invite: string, accountName: string) => {
+      register: async (input: { username: string; password: string; invite?: string }) => {
+        const res = await authCall<{ accountId: string; username: string }>('/auth/register', {
+          username: input.username,
+          password: input.password,
+          invite: input.invite ?? '',
+          deviceId: mobile.deviceId,
+          secret: mobile.deviceSecret,
+          deviceName: mobile.deviceName
+        })
+        if (!res.ok) return res
+        mobile.accountId = res.data.accountId
+        mobile.username = res.data.username
+        saveMobileIdentity(mobile)
+        return res
+      },
+      login: async (input: { username: string; password: string }) => {
+        const res = await authCall<{ accountId: string; username: string }>('/auth/login', {
+          username: input.username,
+          password: input.password,
+          deviceId: mobile.deviceId,
+          secret: mobile.deviceSecret,
+          deviceName: mobile.deviceName
+        })
+        if (!res.ok) return res
+        mobile.accountId = res.data.accountId
+        mobile.username = res.data.username
+        saveMobileIdentity(mobile)
+        return res
+      },
+      claim: async (input: { username: string; password: string }) => {
+        const res = await authCall<{ accountId: string; username: string }>(
+          '/auth/claim',
+          { username: input.username, password: input.password },
+          tokenOf()
+        )
+        if (!res.ok) return res
+        mobile.accountId = res.data.accountId
+        mobile.username = res.data.username
+        saveMobileIdentity(mobile)
+        return res
+      },
+      logout: async () => {
+        await authCall<{ ok: boolean }>('/auth/logout', {}, tokenOf())
+        mobile.accountId = ''
+        mobile.username = ''
+        saveMobileIdentity(mobile)
+        return { ok: true as const, data: { loggedOut: true } }
+      },
+      me: async () => {
         try {
-          const res = await fetch(`${base}/account/create`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              invite,
-              accountName,
-              deviceId: mobile.deviceId,
-              accountSecret: mobile.deviceSecret,
-              deviceName: mobile.deviceName
-            })
+          const res = await fetch(base() + '/auth/me', {
+            headers: {
+              authorization: `Bearer ${mobile.deviceId}.${mobile.deviceSecret}`,
+              'x-device-name': mobile.deviceName
+            }
           })
-          if (!res.ok) return { ok: false as const, error: `${res.status}：${(await res.text()).slice(0, 160)}` }
-          const { accountId } = (await res.json()) as { accountId: string }
-          mobile.accountId = accountId
-          saveMobileIdentity(mobile)
-          return { ok: true as const, data: { accountId } }
+          if (!res.ok) return { ok: false as const, error: `HTTP ${res.status}` }
+          return { ok: true as const, data: (await res.json()) as { accountId: string; username: string; claimed: boolean; deviceId: string; deviceName: string } }
         } catch (err) {
           return { ok: false as const, error: (err as Error).message }
         }
       },
-      pairStart: async () => {
-        // 移动端是「加入方」，由电脑出码；这里返回未实现提示
-        return { ok: false as const, error: '移动端请扫描电脑上的配对二维码' }
-      },
-      pairJoin: async (payloadText: string) => {
-        try {
-          const parsed = parsePairText(payloadText)
-          if (!parsed) return { ok: false as const, error: '二维码内容不对' }
-          mobile.serverUrl = parsed.u
-          saveMobileIdentity(mobile)
-          const res = await fetch(`${parsed.u}/pair/join`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              // 手动输码时 pairId 为空，服务端按 code 找配对
-              pairId: parsed.p,
-              code: parsed.c,
-              deviceId: mobile.deviceId,
-              accountSecret: mobile.deviceSecret,
-              deviceName: mobile.deviceName
-            })
-          })
-          if (!res.ok) return { ok: false as const, error: `${res.status}：${(await res.text()).slice(0, 160)}` }
-          return await mobilePairStatus(parsed)
-        } catch (err) {
-          return { ok: false as const, error: (err as Error).message }
-        }
-      },
-      pairStatus: async (payloadText: string) => {
-        try {
-          const parsed = parsePairText(payloadText)
-          if (!parsed) return { ok: false as const, error: '二维码内容不对' }
-          return await mobilePairStatus(parsed)
-        } catch (err) {
-          return { ok: false as const, error: (err as Error).message }
-        }
-      },
-      pairPending: async () => ({ ok: false as const, error: '移动端不需要审批' }),
-      pairApprove: async () => ({ ok: false as const, error: '移动端不需要审批' }),
-      pairReject: async () => ({ ok: false as const, error: '移动端不需要审批' }),
       devices: async (): Promise<IpcResult<DeviceListResult>> => {
         const res = await req<DeviceListResult>('/devices')
         return res
@@ -467,8 +513,15 @@ function createStub(): HostApi {
       onMaximizedChange: () => () => {}
     },
     settings: {
-      get: () => Promise.resolve({ miniVisible: false, miniPinned: true, autoStart: false }),
-      setAutoStart: () => Promise.resolve(false)
+      get: () =>
+        Promise.resolve({
+          miniVisible: false,
+          miniPinned: true,
+          autoStart: false,
+          closeToTray: false
+        }),
+      setAutoStart: () => Promise.resolve(false),
+      setCloseToTray: () => Promise.resolve(false)
     },
     calendars: {
       list: () => rejected<CalendarMeta[]>('视图列表'),
@@ -511,25 +564,33 @@ function createStub(): HostApi {
         Promise.resolve({
           serverUrl: '',
           deviceId: '',
-          deviceName: '这台设备',
+          deviceName: 'unknown',
           accountId: '',
+          username: '',
           paired: false
         }),
       setServer: () =>
         Promise.resolve({
           serverUrl: '',
           deviceId: '',
-          deviceName: '这台设备',
+          deviceName: 'unknown',
           accountId: '',
-          paired: false
+          username: '',
+          paired: false,
+          loggedOut: false
         }),
-      createAccount: () => rejected<{ accountId: string }>('创建账号'),
-      pairStart: () => rejected<PairStartResult>('配对'),
-      pairJoin: () => rejected<{ status: string }>('配对'),
-      pairStatus: () => rejected<{ status: string }>('配对'),
-      pairPending: () => rejected<PendingDeviceInfo[]>('待批准设备'),
-      pairApprove: () => rejected<boolean>('批准设备'),
-      pairReject: () => rejected<boolean>('拒绝设备'),
+      register: () => rejected<{ accountId: string; username: string }>('注册'),
+      login: () => rejected<{ accountId: string; username: string }>('登录'),
+      claim: () => rejected<{ accountId: string; username: string }>('认领账号'),
+      logout: () => rejected<{ loggedOut: boolean }>('退出登录'),
+      me: () =>
+        rejected<{
+          accountId: string
+          username: string
+          claimed: boolean
+          deviceId: string
+          deviceName: string
+        }>('账号信息'),
       devices: () => rejected<DeviceListResult>('设备列表'),
       revokeDevice: () => rejected<boolean>('撤销设备'),
       changes: () => Promise.resolve({ local: 0, remote: 0, changed: false }),

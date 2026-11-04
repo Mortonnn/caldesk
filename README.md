@@ -67,17 +67,20 @@ MCP（给 AI 用）：`node bin/cal-mcp.mjs`，工具定义在 `src/shared/tools
 表结构不用手工建：Worker 首次请求会执行 `worker/src/schema.ts` 里的
 `CREATE TABLE IF NOT EXISTS`（每个 isolate 一次）。
 
-### 账号与配对模型
+### 账号模型
 
-**没有全局共享令牌**。每台设备一套凭据：
+**没有全局共享令牌**，也没有配对码：账号就是用户名 + 密码。
 
-- 凭据形态：`Authorization: Bearer <deviceId>.<deviceSecret>`
-- 服务端只存 `sha256(salt || deviceSecret)`，明文 secret 不落库
-- 新设备走**配对**：电脑生成 6 位码（5 分钟有效）→ 手机扫码或输码申请
-  → 电脑在「同步 → 待批准设备」里批准 → 服务端把手机挂进同一个 `account_id`
-- 账号由凭据反查（`devices.account_id`），**永远不从请求体取**
+- 密码：PBKDF2-HMAC-SHA256（120k 次迭代 + 每账号随机盐）存成 hex，服务端不存明文；
+  策略是至少 10 位、数字 + 大小写 + 符号各至少一个，客户端提供"生成强密码"
+- 登录成功后服务端给这台设备记一条凭据：`Authorization: Bearer <deviceId>.<deviceSecret>`
+  （secret 由客户端生成，服务端只存 `sha256(salt || secret)`）
+- **任意设备登录同一个账号，就绑定到同一个 `account_id`**，读写同一份日历
+- 账号一律由凭据反查（`devices.account_id`），**永远不从请求体取**
 - 所有读写按 `account_id` 过滤，跨账号看不到对方数据
-- 设备可以在电脑端随时撤销，撤销后该设备立刻 401
+- 配对时代创建的老账号：用现有设备凭据调一次 `/auth/claim` 设用户名密码即可，数据一行不动
+- 设备可以在任意一端撤销，撤销后该设备立刻 401
+- 设备默认名是 `设备名_月日时`（例如 `Morton-laptop_110413`），列表里不再是一堆"这台手机"
 
 服务端存明文（用户明确要求简单方便），隐私靠上面这套隔离保证。
 
@@ -88,10 +91,11 @@ MCP（给 AI 用）：`node bin/cal-mcp.mjs`，工具定义在 `src/shared/tools
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/health` | 存活探测，返回 D1 是否绑定 |
-| POST | `/pair/start` | 电脑发起配对，生成 6 位码 |
-| POST | `/pair/join` | 手机申请入伙（`pairId` 可空，服务端按码查） |
-| GET | `/pair/status` | 查配对状态；批准后返回 `accountId` |
-| POST | `/pair/approve` / `/pair/reject` | 电脑批准 / 拒绝 |
+| POST | `/auth/register` | 注册：建账号 + 绑定当前设备 |
+| POST | `/auth/login` | 登录：校验密码 + 绑定当前设备 |
+| POST | `/auth/claim` | 老账号补设用户名密码（需设备凭据） |
+| GET | `/auth/me` | 当前账号与设备信息 |
+| POST | `/auth/logout` | 撤销当前设备 |
 | GET | `/devices` | 列出本账号设备 |
 | POST | `/devices/revoke` | 撤销设备 |
 | GET | `/api/changes` | 账号内最新 `updated_at`，各端拿它做热更新轮询 |
