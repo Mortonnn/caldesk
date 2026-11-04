@@ -40,20 +40,6 @@ export interface HttpConfig {
   deviceSecret?: string
 }
 
-/** 配对相关的数据形状（桌面端与移动端一致） */
-export interface PairStartResult {
-  pairId: string
-  code: string
-  expiresAt: number
-  qr: string
-}
-
-export interface PendingDeviceInfo {
-  deviceId: string
-  name: string
-  createdAt: number
-}
-
 export interface DeviceListResult {
   devices: Array<{
     deviceId: string
@@ -91,7 +77,7 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
 
   /**
    * 服务器地址以身份里的为准：默认地址可能为空，
-   * 配对成功后 pairJoin 会把二维码里的真实地址写进身份。
+   * 登录成功后服务端返回的地址会写进身份。
    */
   const base = (): string => (mobile.serverUrl || cfg.url || '').replace(/\/$/, '')
 

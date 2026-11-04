@@ -7,10 +7,10 @@
  *
  * 数据模型说明：
  * - accounts：一个账号 = 一份数据的归属者（多账号隔离的根）。
+ *              账号凭据是「用户名 + 密码」，密码存 PBKDF2 哈希 + 随机盐。
  *              服务端存明文，encrypted 列只作历史兼容，不再写入也不再读取。
  * - devices ：账号下的设备，凭 secret_salt + sha256(salt||secret) 认人，
- *              status 走 pending → approved / revoked 的配对流程
- * - pairings ：一次性配对码（6 位数字，5 分钟有效），授权端生成、新设备消费
+ *              status 是 approved / revoked；登录成功即 approved
  * - rows     ：所有集合共用一张表，payload 是整行的明文 JSON 字符串，
  *              服务端不加密、不改写；主键 (tbl, account_id, id) —— 带上
  *              account_id 是为了让不同账号可以用同一个行 id 而互不干扰
@@ -43,15 +43,6 @@ const SCHEMA: string[] = [
      last_ip      TEXT
    )`,
   `CREATE INDEX IF NOT EXISTS idx_devices_account ON devices (account_id)`,
-  `CREATE TABLE IF NOT EXISTS pairings (
-     id         TEXT    PRIMARY KEY,
-     account_id TEXT    NOT NULL,
-     code       TEXT    NOT NULL,
-     created_at INTEGER NOT NULL,
-     expires_at INTEGER NOT NULL,
-     status     TEXT    NOT NULL DEFAULT 'open'
-   )`,
-  `CREATE INDEX IF NOT EXISTS idx_pairings_account ON pairings (account_id)`,
   `CREATE TABLE IF NOT EXISTS rows (
      tbl        TEXT    NOT NULL,
      id         TEXT    NOT NULL,

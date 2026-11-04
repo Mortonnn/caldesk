@@ -23,6 +23,7 @@
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "test:rrule": "node scripts/verify-rrule.mjs",
     "test:calendar": "node scripts/verify-calendar.mjs",
+    "test:auth": "node scripts/verify-auth.mjs",
     "pack": "electron-vite build && electron-builder --dir",
     "dist": "electron-vite build && electron-builder"
   },
