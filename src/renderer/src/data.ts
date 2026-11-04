@@ -467,7 +467,13 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
         const res = await req<DeviceListResult>('/devices')
         return res
       },
-      revokeDevice: async () => ({ ok: false as const, error: '请在电脑上撤销设备' }),
+      revokeDevice: async (deviceId: string): Promise<IpcResult<boolean>> => {
+        const res = await req<{ ok?: boolean }>('/devices/revoke', {
+          method: 'POST',
+          body: JSON.stringify({ deviceId, purge: true })
+        })
+        return res.ok ? { ok: true as const, data: true } : res
+      },
       /** 变更探针：手机每隔几秒问一次服务端"有没有新东西" */
       changes: async () => {
         const res = await req<{ token?: number }>('/api/changes')

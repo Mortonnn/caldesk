@@ -330,6 +330,7 @@ export async function listDevices(id: StoredIdentity): Promise<DeviceList> {
   return call<DeviceList>(id, '/devices')
 }
 
+/** 删除设备：撤销它的凭据，并把这一行从列表里去掉 */
 export async function revokeDevice(id: StoredIdentity, deviceId: string): Promise<void> {
-  await call(id, '/devices/revoke', { method: 'POST', body: { deviceId } })
+  await call(id, '/devices/revoke', { method: 'POST', body: { deviceId, purge: true } })
 }

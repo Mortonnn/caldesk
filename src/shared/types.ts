@@ -200,6 +200,8 @@ export interface SnapshotMeta {
   tables: string[]
   createdAt: number
   updatedAt: number
+  /** 当前停在这个时间点上 */
+  current: boolean
 }
 
 export interface RestoreResult {

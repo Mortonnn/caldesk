@@ -50,6 +50,9 @@ import { generateStrongPassword } from './password'
 
 const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日']
 
+/** 历史默认露出几条，剩下的折叠 */
+const SNAP_PREVIEW = 5
+
 type RepeatPreset = 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly' | 'custom'
 
 const REPEAT_LABEL: Record<RepeatPreset, string> = {
@@ -135,6 +138,8 @@ export default function App(): React.JSX.Element {
   const [panel, setPanel] = useState<'none' | 'notes' | 'search' | 'settings'>('none')
   const [snaps, setSnaps] = useState<SnapshotMeta[]>([])
   const [snapMsg, setSnapMsg] = useState<string | null>(null)
+  /** 历史默认只露 5 条，多的点开看 */
+  const [snapExpanded, setSnapExpanded] = useState(false)
   const [notes, setNotes] = useState<Note[]>([])
   const [editing, setEditing] = useState<{ id?: string; title: string; content: string } | null>(null)
   const [query, setQuery] = useState('')
@@ -328,7 +333,7 @@ export default function App(): React.JSX.Element {
 
   async function revokeDevice(deviceId: string): Promise<void> {
     const res = await data.sync.revokeDevice(deviceId)
-    setSyncMsg(res.ok ? '已撤销该设备' : `撤销失败：${res.error}`)
+    setSyncMsg(res.ok ? '已删除该设备' : `删除失败：${res.error}`)
     void refreshDevices()
   }
 
@@ -371,7 +376,7 @@ export default function App(): React.JSX.Element {
     }
     const { restored, deleted, failed } = res.data
     setSnapMsg(
-      `已恢复 ${restored} 条、撤销 ${deleted} 条${failed > 0 ? `，失败 ${failed}` : ''}`
+      `已回到该时间点：恢复 ${restored} 条、删除 ${deleted} 条${failed > 0 ? `，失败 ${failed}` : ''}`
     )
     await loadSnaps()
     await refresh()
@@ -1463,8 +1468,9 @@ export default function App(): React.JSX.Element {
                                   <button
                                     className="ghost"
                                     onClick={() => void revokeDevice(d.deviceId)}
+                                    title="撤销这台设备的凭据并从列表删除"
                                   >
-                                    撤销
+                                    删除
                                   </button>
                                 )}
                               </div>
@@ -1537,28 +1543,45 @@ export default function App(): React.JSX.Element {
                       <span className="set-count">{snaps.length} / 100</span>
                     </div>
                     <p className="pop-desc">
-                      每次改动都记下改动前的内容；连续编辑每 100 秒合并成一条，最多留 100 条。
+                      每次改动记一个时间点；点哪个点就回到哪个点，不新增记录。
                     </p>
                     {snaps.length === 0 ? (
                       <p className="empty">还没有可回滚的记录</p>
                     ) : (
-                      snaps.map((s) => (
-                        <div key={s.id} className="snap-row">
-                          <div className="snap-main">
-                            <span className="snap-label">{s.label}</span>
-                            <span className="snap-meta">
-                              {stampOf(s.updatedAt)} · {s.count} 处 ·{' '}
-                              {s.tables.map((t) => TABLE_LABEL[t] ?? t).join('、')}
-                            </span>
+                      <>
+                        {(snapExpanded ? snaps : snaps.slice(0, SNAP_PREVIEW)).map((s) => (
+                          <div key={s.id} className={`snap-row ${s.current ? 'is-current' : ''}`}>
+                            <div className="snap-main">
+                              <span className="snap-label">
+                                {s.label}
+                                {s.current && <span className="snap-badge">当前</span>}
+                              </span>
+                              <span className="snap-meta">
+                                {stampOf(s.updatedAt)} · {s.count} 处 ·{' '}
+                                {s.tables.map((t) => TABLE_LABEL[t] ?? t).join('、')}
+                              </span>
+                            </div>
+                            {!s.current && (
+                              <button
+                                className="ghost snap-restore"
+                                onClick={() => void restoreSnap(s.id)}
+                              >
+                                回到这里
+                              </button>
+                            )}
                           </div>
+                        ))}
+                        {snaps.length > SNAP_PREVIEW && (
                           <button
-                            className="ghost snap-restore"
-                            onClick={() => void restoreSnap(s.id)}
+                            className="snap-more"
+                            onClick={() => setSnapExpanded((v) => !v)}
                           >
-                            恢复
+                            {snapExpanded
+                              ? '收起'
+                              : `展开剩余 ${snaps.length - SNAP_PREVIEW} 条`}
                           </button>
-                        </div>
-                      ))
+                        )}
+                      </>
                     )}
                     <div className="note-actions">
                       <button className="ghost" disabled={snaps.length === 0} onClick={() => void clearSnaps()}>

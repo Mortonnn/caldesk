@@ -882,6 +882,24 @@ export default function MobileApp(): React.JSX.Element {
                             {d.lastSeenAt ? ` · ${seenAt(d.lastSeenAt)}` : ''}
                           </div>
                         </div>
+                        {!d.current && (
+                          <button
+                            className="m-side-btn"
+                            onClick={() => {
+                              void (async () => {
+                                const res = await data.sync.revokeDevice(d.deviceId)
+                                if (!res.ok) {
+                                  say(res.error)
+                                  return
+                                }
+                                setDevices((prev) => prev.filter((x) => x.deviceId !== d.deviceId))
+                                say('已删除该设备')
+                              })()
+                            }}
+                          >
+                            删除
+                          </button>
+                        )}
                       </div>
                     ))
                   )}

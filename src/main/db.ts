@@ -955,6 +955,21 @@ function trimSnapshots(): void {
     .run(SNAP_ACCOUNT, SNAP_ACCOUNT, SNAP_LIMIT)
 }
 
+/** 当前停在哪个时间点上（没恢复过就是最新那条） */
+const SNAP_CURSOR_KEY = 'snap.cursor'
+
+export function currentSnapshotId(): string | null {
+  const id = getMeta(SNAP_CURSOR_KEY)
+  if (!id) return null
+  // 记录的 id 可能已经被清空或裁剪掉，那就当没有游标
+  const row = requireDb().prepare('SELECT id FROM snapshots WHERE id = ?').get(id)
+  return row ? id : null
+}
+
+function setSnapshotCursor(id: string): void {
+  setMeta(SNAP_CURSOR_KEY, id)
+}
+
 /**
  * 在真正写库之前调用：把受影响行的原始状态打成一条回滚记录。
  * 快照失败绝不能让用户的编辑失败，所以整体包在 try/catch 里。
@@ -994,13 +1009,17 @@ function recordSnapshot(
       conn
         .prepare('UPDATE snapshots SET entries = ?, count = ?, updated_at = ? WHERE id = ?')
         .run(JSON.stringify(merged), merged.length, now, String(recent.id))
+      // 又有了新改动 = 站回时间线最上面那个点
+      setSnapshotCursor(String(recent.id))
     } else {
+      const newId = randomUUID()
       conn
         .prepare(
           `INSERT INTO snapshots (id, account, label, entries, count, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?)`
         )
-        .run(randomUUID(), SNAP_ACCOUNT, label, JSON.stringify(entries), entries.length, now, now)
+        .run(newId, SNAP_ACCOUNT, label, JSON.stringify(entries), entries.length, now, now)
+      setSnapshotCursor(newId)
     }
     trimSnapshots()
   } catch (err) {
@@ -1008,7 +1027,7 @@ function recordSnapshot(
   }
 }
 
-/** 最近的回滚记录（按 updated_at 倒序） */
+/** 最近的回滚记录（按 updated_at 倒序），只有一条的 current 为 true */
 export function listSnapshots(limit = SNAP_LIMIT): SnapshotMeta[] {
   const max = Math.min(Math.max(1, limit), SNAP_LIMIT)
   const rows = requireDb()
@@ -1017,6 +1036,8 @@ export function listSnapshots(limit = SNAP_LIMIT): SnapshotMeta[] {
        WHERE account = ? ORDER BY updated_at DESC LIMIT ?`
     )
     .all(SNAP_ACCOUNT, max)
+  // 游标指向哪里；没有游标（从没恢复过）就是最新一条
+  const cursor = currentSnapshotId() ?? (rows.length > 0 ? String(rows[0].id) : null)
   return rows.map((row) => {
     const entries = parseEntries(String(row.entries ?? '[]'))
     return {
@@ -1025,16 +1046,18 @@ export function listSnapshots(limit = SNAP_LIMIT): SnapshotMeta[] {
       count: Number(row.count ?? entries.length),
       tables: [...new Set(entries.map((entry) => entry.table))],
       createdAt: Number(row.created_at),
-      updatedAt: Number(row.updated_at)
+      updatedAt: Number(row.updated_at),
+      current: String(row.id) === cursor
     }
   })
 }
 
 /**
- * 回滚到某条记录：把记录里的行按 data 写回，data=null 的行删除。
- * 关键点：
- *  - 动手之前先把"当前状态"存成一条新记录，回滚本身也能撤销；
- *  - 恢复的行把 updated_at 改成现在，这样它在 LWW 里胜出并被推上云端；
+ * 回到某个时间点：把记录里的行按 data 写回，data=null 的行删除。
+ *
+ * 这一下**不算改动**：不新增记录、也不删掉被恢复的那条，只把"当前所在"挪过去。
+ * 所以时间线长度不变，点哪个点就是站到哪个点上，来回跳都行。
+ *  - 恢复出来的行把 updated_at 改成现在，这样它在 LWW 里胜出并被推上云端；
  *  - 单行失败只计数，不中断其余行。
  */
 export function restoreSnapshot(id: string): RestoreResult {
@@ -1043,13 +1066,6 @@ export function restoreSnapshot(id: string): RestoreResult {
   if (!row) throw new Error('回滚记录不存在')
 
   const entries = parseEntries(String(row.entries ?? '[]'))
-  // fresh=true：否则这条备份会并进即将被删掉的那条记录，等于没备份
-  recordSnapshot(
-    '回滚前的自动备份',
-    entries.map((entry) => ({ table: entry.table, id: entry.id })),
-    { fresh: true }
-  )
-
   const result: RestoreResult = { restored: 0, deleted: 0, failed: 0 }
   const now = Date.now()
 
@@ -1081,14 +1097,16 @@ export function restoreSnapshot(id: string): RestoreResult {
     }
   }
 
-  // 同一条记录不允许应用两次
-  conn.prepare('DELETE FROM snapshots WHERE id = ?').run(id)
+  // 站到这一点上（记录本身留着，随时能跳回来）
+  setSnapshotCursor(id)
   return result
 }
 
 /** 清空全部回滚记录，返回删除条数 */
 export function clearSnapshots(): number {
   const res = requireDb().prepare('DELETE FROM snapshots WHERE account = ?').run(SNAP_ACCOUNT)
+  // 记录都没了，游标也一起清掉
+  requireDb().prepare('DELETE FROM meta WHERE key = ?').run(SNAP_CURSOR_KEY)
   return Number((res as { changes?: number }).changes ?? 0)
 }
 

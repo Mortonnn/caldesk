@@ -627,10 +627,18 @@ async function listDevices(env: Env, auth: AuthedDevice): Promise<Response> {
   return json({ devices, online })
 }
 
+/**
+ * 撤销一台设备。
+ *
+ * 默认只标记 revoked（凭据立刻失效，但行还留着可追溯）；
+ * 传 purge=true 就把这一行整个删掉 —— 客户端里"删除设备"就是这个意思：
+ * 撤销 + 从列表里消失。行没了凭据自然也就查不到，照样 401。
+ */
 async function revokeDevice(req: Request, env: Env, auth: AuthedDevice): Promise<Response> {
   const body = await readJson(req)
   if (!body) return fail(400, 'bad_json', '请求体不是合法 JSON')
   const deviceId = str(body.deviceId).trim()
+  const purge = body.purge === true
   if (!deviceId) return fail(400, 'missing_fields', '缺少 deviceId')
   if (deviceId === auth.deviceId) return fail(400, 'cannot_revoke_self', '不能吊销当前设备')
 
@@ -641,8 +649,12 @@ async function revokeDevice(req: Request, env: Env, auth: AuthedDevice): Promise
   )
   if (!device || device.account_id !== auth.accountId) return fail(404, 'device_not_found', '设备不存在')
 
+  if (purge) {
+    await env.DB.prepare('DELETE FROM devices WHERE device_id = ?').bind(deviceId).run()
+    return json({ ok: true, deleted: true })
+  }
   await env.DB.prepare(`UPDATE devices SET status = 'revoked' WHERE device_id = ?`).bind(deviceId).run()
-  return json({ ok: true })
+  return json({ ok: true, deleted: false })
 }
 
 /* ------------------------------ 同步 ------------------------------ */
