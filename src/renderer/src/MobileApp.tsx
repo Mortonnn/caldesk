@@ -141,14 +141,24 @@ export default function MobileApp(): React.JSX.Element {
     setTimeout(() => setToast((t) => (t === msg ? null : t)), 2200)
   }, [])
 
+  /**
+   * 重新读一遍身份（账号、设备名、服务器地址）。
+   * 登录后必须再读一次：登录会换设备凭据、也会写进用户名，
+   * 不重读的话设置页会一直显示「未登录」。
+   */
+  const reloadIdentity = useCallback(async () => {
+    const st = await data.sync.getState()
+    setPaired(st.paired)
+    setUsername(st.username)
+    setServerUrl(st.serverUrl || DEFAULT_SERVER_URL)
+    setServerDraft(st.serverUrl || '')
+    return st
+  }, [])
+
   /* 启动：读身份 + 拉日历 */
   useEffect(() => {
     void (async () => {
-      const st = await data.sync.getState()
-      setPaired(st.paired)
-      setUsername(st.username)
-      setServerUrl(st.serverUrl || DEFAULT_SERVER_URL)
-      setServerDraft(st.serverUrl || '')
+      const st = await reloadIdentity()
       if (!st.paired) {
         setReady(true)
         return
@@ -164,7 +174,7 @@ export default function MobileApp(): React.JSX.Element {
         if (devs.ok) setDevices(devs.data.devices)
       })
     })()
-  }, [])
+  }, [reloadIdentity])
 
   /* 应用真正可用了再移除启动画面（移动端首帧由 index.html 内联绘制） */
   useEffect(() => {
@@ -454,7 +464,19 @@ export default function MobileApp(): React.JSX.Element {
   }
 
   if (!paired) {
-    return <MobileSetup onDone={() => { setPaired(true); void refreshAll() }} />
+    return (
+      <MobileSetup
+        onDone={() => {
+          // 登录会写用户名 + 可能换设备凭据，必须重读身份再拉数据
+          void (async () => {
+            await reloadIdentity()
+            await refreshAll()
+            const devs = await data.sync.devices()
+            if (devs.ok) setDevices(devs.data.devices)
+          })()
+        }}
+      />
+    )
   }
 
   const cal = calendars.find((c) => c.id === calId)
