@@ -79,6 +79,8 @@ function applyAuthResult(id: MobileIdentity, res: AuthResult): void {
     id.deviceId = res.deviceId
     id.deviceSecret = res.secret
   }
+  // 名字始终用本地这份（型号_月日时），换凭据时别把旧名字带过去
+  id.deviceName = id.deviceName || 'unknown'
 }
 
 const HOST_KEY = 'caldesk.http'
@@ -90,7 +92,8 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
   const mobile: MobileIdentity = ensureMobileIdentity({
     // 空配置不能把已有的地址擦掉，undefined 才是「保持原样」
     serverUrl: cfg.url || undefined,
-    deviceName: cfg.deviceId ? '这台手机' : undefined
+    // 别用占位名覆盖本地已经迁移好的名字（型号_月日时）
+    deviceName: undefined
   })
 
   /**
