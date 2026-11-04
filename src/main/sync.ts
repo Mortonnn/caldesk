@@ -248,12 +248,20 @@ async function postAuth<T>(
   return (await res.json()) as T
 }
 
+export interface AuthResult {
+  accountId: string
+  username: string
+  /** 服务端可能换了一把新钥匙（这台设备原来挂在别的账号下），客户端要换成本地凭据 */
+  deviceId?: string
+  secret?: string
+}
+
 /** 注册：建账号 + 这台电脑作为首台设备 */
 export async function registerAccount(
   id: StoredIdentity,
   input: AuthInput
-): Promise<{ accountId: string; username: string }> {
-  return postAuth<{ accountId: string; username: string }>(id, '/auth/register', {
+): Promise<AuthResult> {
+  return postAuth<AuthResult>(id, '/auth/register', {
     username: input.username,
     password: input.password,
     invite: input.invite ?? '',
@@ -264,11 +272,8 @@ export async function registerAccount(
 }
 
 /** 登录：任意设备登录同一账号，就绑到同一个 accountId（不需要配对） */
-export async function loginAccount(
-  id: StoredIdentity,
-  input: AuthInput
-): Promise<{ accountId: string; username: string }> {
-  return postAuth<{ accountId: string; username: string }>(id, '/auth/login', {
+export async function loginAccount(id: StoredIdentity, input: AuthInput): Promise<AuthResult> {
+  return postAuth<AuthResult>(id, '/auth/login', {
     username: input.username,
     password: input.password,
     deviceId: id.deviceId,

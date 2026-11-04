@@ -200,8 +200,10 @@ async function accountById(env: Env, id: string): Promise<AccountAuthRow | null>
 
 /**
  * 把一台设备挂到账号下（登录 / 注册都走这里）。
- * 设备凭据仍由客户端生成，服务端只存哈希；同一 deviceId 属于别的账号时拒绝，
- * 防止一台设备的本地身份被另一个账号悄悄接管。
+ *
+ * 设备凭据由客户端生成，服务端只存哈希。同一个 deviceId 已经属于别的账号时，
+ * 这里**换一把新钥匙**：服务端发一个新的 deviceId + secret 回来，客户端换成本地凭据。
+ * 这样"退出登录后换一个账号登录"能走通，同时旧账号那一行原样留着（还能在它那边撤销）。
  */
 async function bindDevice(
   env: Env,
@@ -209,17 +211,30 @@ async function bindDevice(
   deviceId: string,
   deviceName: string,
   secret: string
-): Promise<Response | null> {
+): Promise<{ deviceId: string; secret: string } | Response> {
   const existing = await firstRow<{ account_id: string }>(
     env,
     'SELECT account_id FROM devices WHERE device_id = ?',
     deviceId
   )
-  if (existing && existing.account_id !== accountId) {
-    return fail(409, 'device_conflict', '这台设备的身份属于另一个账号，请先在设置里退出登录')
-  }
   const { salt, hash } = await makeCredential(secret)
   const now = Date.now()
+
+  if (existing && existing.account_id !== accountId) {
+    // 这台设备原来挂在别的账号下：给它发一套新凭据，旧账号那一行不动
+    const freshId = crypto.randomUUID()
+    const freshSecret = randomHex(32)
+    const fresh = await makeCredential(freshSecret)
+    await env.DB.prepare(
+      `INSERT INTO devices
+         (device_id, account_id, name, secret_salt, secret_hash, status, created_at, last_seen_at, last_ip)
+       VALUES (?, ?, ?, ?, ?, 'approved', ?, ?, NULL)`
+    )
+      .bind(freshId, accountId, deviceName, fresh.salt, fresh.hash, now, now)
+      .run()
+    return { deviceId: freshId, secret: freshSecret }
+  }
+
   if (existing) {
     await env.DB.prepare(
       `UPDATE devices SET name = ?, secret_salt = ?, secret_hash = ?, status = 'approved', last_seen_at = ?
@@ -236,7 +251,7 @@ async function bindDevice(
       .bind(deviceId, accountId, deviceName, salt, hash, now, now)
       .run()
   }
-  return null
+  return { deviceId, secret }
 }
 
 async function readJson(req: Request): Promise<Record<string, unknown> | null> {
@@ -467,14 +482,14 @@ async function registerAccount(req: Request, env: Env): Promise<Response> {
     throw new Error('账号创建失败')
   }
 
-  const bindError = await bindDevice(env, accountId, deviceId, deviceName, secret)
-  if (bindError) {
+  const bound = await bindDevice(env, accountId, deviceId, deviceName, secret)
+  if (bound instanceof Response) {
     // 设备冲突：把刚建的账号收回，避免留下没有设备的空账号
     await env.DB.prepare('DELETE FROM accounts WHERE id = ?').bind(accountId).run()
-    return bindError
+    return bound
   }
 
-  return json({ accountId, username })
+  return json({ accountId, username, deviceId: bound.deviceId, secret: bound.secret })
 }
 
 /** 登录：校验密码，然后把当前设备挂到该账号（任意设备登录同一账号即同步） */
@@ -507,10 +522,16 @@ async function loginAccount(req: Request, env: Env): Promise<Response> {
     return fail(401, 'bad_credentials', '用户名或密码不正确')
   }
 
-  const bindError = await bindDevice(env, account.id, deviceId, deviceName, secret)
-  if (bindError) return bindError
+  const bound = await bindDevice(env, account.id, deviceId, deviceName, secret)
+  if (bound instanceof Response) return bound
 
-  return json({ accountId: account.id, username: account.username ?? username })
+  // 设备之前挂在别的账号下时，服务端换了一把新钥匙，客户端要换成本地凭据
+  return json({
+    accountId: account.id,
+    username: account.username ?? username,
+    deviceId: bound.deviceId,
+    secret: bound.secret
+  })
 }
 
 /**

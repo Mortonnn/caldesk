@@ -129,11 +129,11 @@ const api = {
       }>,
     register: (input: { username: string; password: string; invite?: string }) =>
       ipcRenderer.invoke('sync:register', input) as Promise<
-        IpcResult<{ accountId: string; username: string }>
+        IpcResult<{ accountId: string; username: string; deviceId?: string; secret?: string }>
       >,
     login: (input: { username: string; password: string }) =>
       ipcRenderer.invoke('sync:login', input) as Promise<
-        IpcResult<{ accountId: string; username: string }>
+        IpcResult<{ accountId: string; username: string; deviceId?: string; secret?: string }>
       >,
     claim: (input: { username: string; password: string }) =>
       ipcRenderer.invoke('sync:claim', input) as Promise<

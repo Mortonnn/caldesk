@@ -156,5 +156,26 @@ check('退出后凭据失效', meAfter.status === 401, JSON.stringify(meAfter))
 const meA2 = await get('/auth/me', tokenA)
 check('另一台设备不受影响', meA2.status === 200, JSON.stringify(meA2))
 
+// 换账号登录：设备原本挂在别的账号下时，服务端应换一把新钥匙并把新凭据返回
+const user2 = `${user}_b`
+const reg2 = await post('/auth/register', {
+  username: user2,
+  password: pw,
+  deviceId: devA.id,
+  secret: devA.secret,
+  deviceName: '重新登录的设备',
+  invite: INVITE
+})
+check('同设备可注册到新账号', reg2.status === 200, JSON.stringify(reg2))
+check(
+  '服务端换发了新凭据',
+  reg2.body?.deviceId && reg2.body?.deviceId !== devA.id && reg2.body?.secret,
+  JSON.stringify(reg2.body)
+)
+const newToken = `Bearer ${reg2.body?.deviceId}.${reg2.body?.secret}`
+const meNew = await get('/auth/me', newToken)
+check('新凭据可直接用', meNew.status === 200, JSON.stringify(meNew))
+check('新凭据属于新账号', meNew.body?.username === user2, JSON.stringify(meNew))
+
 console.log(`\n通过 ${pass} / ${pass + fail}`)
 process.exit(fail === 0 ? 0 : 1)

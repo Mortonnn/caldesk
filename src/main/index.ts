@@ -777,6 +777,25 @@ function saveAccount(id: StoredIdentity, accountId: string, username: string): S
   return next
 }
 
+/**
+ * 服务端可能给这台设备换了一把新钥匙（它原来挂在别的账号下）。
+ * 这时候要把新的 deviceId / secret 落到本地，否则下一次请求还是用旧凭据。
+ */
+function applyAuthCredentials(
+  id: StoredIdentity,
+  res: { deviceId?: string; secret?: string }
+): StoredIdentity {
+  if (!res.deviceId || !res.secret) return id
+  if (res.deviceId === id.deviceId && res.secret === id.deviceSecret) return id
+  const next: StoredIdentity = {
+    ...id,
+    deviceId: res.deviceId,
+    deviceSecret: res.secret
+  }
+  saveIdentity(app.getPath('userData'), next)
+  return next
+}
+
 /** 注册：建账号 + 这台电脑成为首台设备 */
 ipcMain.handle(
   'sync:register',
@@ -785,7 +804,8 @@ ipcMain.handle(
       const id = identityOf()
       if (!id.serverUrl) return { ok: false, error: '先填服务器地址' }
       const res = await registerAccount(id, input)
-      saveAccount(id, res.accountId, res.username)
+      const withKey = applyAuthCredentials(id, res)
+      saveAccount(withKey, res.accountId, res.username)
       return { ok: true, data: res }
     } catch (err) {
       return { ok: false, error: (err as Error).message }
@@ -799,7 +819,8 @@ ipcMain.handle('sync:login', async (_e, input: { username: string; password: str
     const id = identityOf()
     if (!id.serverUrl) return { ok: false, error: '先填服务器地址' }
     const res = await loginAccount(id, input)
-    saveAccount(id, res.accountId, res.username)
+    const withKey = applyAuthCredentials(id, res)
+    saveAccount(withKey, res.accountId, res.username)
     return { ok: true, data: res }
   } catch (err) {
     return { ok: false, error: (err as Error).message }

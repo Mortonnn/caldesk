@@ -63,6 +63,24 @@ export interface SyncStateResult {
   loggedOut?: boolean
 }
 
+/** 账号接口的返回：服务端可能给这台设备换了一把新钥匙 */
+export interface AuthResult {
+  accountId: string
+  username: string
+  deviceId?: string
+  secret?: string
+}
+
+/** 把登录/注册的结果落到本地身份上（必要时换成本地新凭据） */
+function applyAuthResult(id: MobileIdentity, res: AuthResult): void {
+  id.accountId = res.accountId
+  id.username = res.username
+  if (res.deviceId && res.secret) {
+    id.deviceId = res.deviceId
+    id.deviceSecret = res.secret
+  }
+}
+
 const HOST_KEY = 'caldesk.http'
 
 /* ------------------------------ HTTP 适配器 ------------------------------ */
@@ -383,7 +401,7 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
         }
       },
       register: async (input: { username: string; password: string; invite?: string }) => {
-        const res = await authCall<{ accountId: string; username: string }>('/auth/register', {
+        const res = await authCall<AuthResult>('/auth/register', {
           username: input.username,
           password: input.password,
           invite: input.invite ?? '',
@@ -392,13 +410,12 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
           deviceName: mobile.deviceName
         })
         if (!res.ok) return res
-        mobile.accountId = res.data.accountId
-        mobile.username = res.data.username
+        applyAuthResult(mobile, res.data)
         saveMobileIdentity(mobile)
         return res
       },
       login: async (input: { username: string; password: string }) => {
-        const res = await authCall<{ accountId: string; username: string }>('/auth/login', {
+        const res = await authCall<AuthResult>('/auth/login', {
           username: input.username,
           password: input.password,
           deviceId: mobile.deviceId,
@@ -406,8 +423,7 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
           deviceName: mobile.deviceName
         })
         if (!res.ok) return res
-        mobile.accountId = res.data.accountId
-        mobile.username = res.data.username
+        applyAuthResult(mobile, res.data)
         saveMobileIdentity(mobile)
         return res
       },
