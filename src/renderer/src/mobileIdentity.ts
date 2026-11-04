@@ -104,12 +104,13 @@ export function ensureMobileIdentity(patch: {
   if (existing) {
     const next: MobileIdentity = {
       ...existing,
-      // 传空字符串 = 用默认服务器
+      // 空字符串 = 保持原样（只有显式传 undefined 才表示"没给"）；
+      // 这样内部调用传 '' 不会把服务器地址和账号一起抹掉
       serverUrl:
-        patch.serverUrl === undefined
+        patch.serverUrl === undefined || patch.serverUrl.trim() === ''
           ? existing.serverUrl
-          : patch.serverUrl.trim() || DEFAULT_SERVER_URL,
-      deviceName: patch.deviceName ?? existing.deviceName
+          : patch.serverUrl.trim(),
+      deviceName: patch.deviceName?.trim() || existing.deviceName
     }
     saveMobileIdentity(next)
     return next

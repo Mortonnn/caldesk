@@ -82,7 +82,7 @@ export function saveIdentity(userDataDir: string, id: StoredIdentity): void {
   }
 }
 
-/** 只保证「这台设备有身份」，账号可以还没有（等创建或配对） */
+/** 只保证「这台设备有身份」，账号可以还没有（等注册或登录） */
 export function ensureIdentity(
   userDataDir: string,
   patch: { serverUrl?: string; deviceName?: string } = {}
@@ -91,8 +91,11 @@ export function ensureIdentity(
   if (existing) {
     const next: StoredIdentity = {
       ...existing,
-      // 传空字符串 = 用默认服务器
-      serverUrl: patch.serverUrl === undefined ? existing.serverUrl : patch.serverUrl.trim() || DEFAULT_SERVER_URL,
+      // 空字符串 = 保持原样：内部调用传 '' 不该把服务器地址和账号一起抹掉
+      serverUrl:
+        patch.serverUrl === undefined || patch.serverUrl.trim() === ''
+          ? existing.serverUrl
+          : patch.serverUrl.trim(),
       deviceName: patch.deviceName ?? existing.deviceName
     }
     if (
