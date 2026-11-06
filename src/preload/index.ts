@@ -173,6 +173,8 @@ const api = {
         local: number
         remote: number
         changed: boolean
+        /** 探测失败（网络不通）时为 false；桌面端走 IPC 一般都有值 */
+        ok?: boolean
       }>,
     run: () =>
       ipcRenderer.invoke('sync:run') as Promise<{

@@ -101,21 +101,21 @@ export default function Setup({ onDone }: { onDone?: () => void }): React.JSX.El
         <input
           className="task-input"
           type="password"
-          placeholder="密码（至少 10 位，含大小写、数字、符号）"
+          placeholder="密码"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
         />
         {mode === 'register' && (
           <input
             className="task-input"
-            placeholder="邀请码（服务器设置了才需要）"
+            placeholder="邀请码"
             value={invite}
             onChange={(e) => setInvite(e.target.value)}
           />
         )}
         <input
           className="task-input"
-          placeholder={DEFAULT_SERVER_URL || '服务器地址，例如 https://caldesk.workers.dev'}
+          placeholder={DEFAULT_SERVER_URL || '服务器地址'}
           autoCapitalize="none"
           autoCorrect="off"
           value={url}

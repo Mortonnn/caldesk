@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
+import { AnimatePresence, motion, useReducedMotion, type Variants } from 'framer-motion'
 import {
   CalMark,
   Check,
@@ -11,14 +11,14 @@ import {
   Plus,
   Search,
   Settings,
-  Trash,
   WinClose,
   WinMaximize,
   WinMinimize,
   WinRestore,
   X
 } from './icons'
-import { DROPLET, DUR, EASE_OUT, PANEL, fade, panelIn } from './motion'
+import { DROPLET, DUR, EASE_EMPHASIZED, EASE_IN, EASE_OUT, fade, panelIn } from './motion'
+import { RepeatChip } from './RepeatChip'
 import {
   addMonths,
   eachDayOfInterval,
@@ -67,12 +67,29 @@ const REPEAT_LABEL: Record<RepeatPreset, string> = {
 const BYDAY = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU']
 
 const TABLE_LABEL: Record<string, string> = {
-  calendars: '视图',
+  calendars: '日历',
   day_cells: '日格',
-  events: '事件',
+  events: '待办',
   event_done: '完成状态',
   event_skip: '跳过记录',
   notes: '便签'
+}
+
+/**
+ * 换页：新旧两页沿同一根轴，速度不一样才像"一页推走一页"。
+ *
+ * 进的那页 14px、240ms（emphasized，起步快收尾慢）；出的是 8px、120ms（in，只出不进）。
+ * 方向由 custom 传进来：往哪边翻，就从哪边进、往反方向退。
+ * dir 为 0 表示这不是翻页（首次加载拿到视图），直接定格，不演。
+ */
+const sheetSwap: Variants = {
+  // 换页：单轴 X + 淡入，距离和手机端对齐（28px / 240ms，emphasized 曲线）
+  initial: (dir: number) => (dir === 0 ? { opacity: 1, x: 0 } : { opacity: 0, x: 24 * dir }),
+  animate: { opacity: 1, x: 0, transition: { duration: DUR.page, ease: EASE_EMPHASIZED } },
+  exit: (dir: number) =>
+    dir === 0
+      ? { opacity: 0, transition: { duration: 0 } }
+      : { opacity: 0, x: -12 * dir, transition: { duration: DUR.fast, ease: EASE_IN } }
 }
 
 /** 回滚记录的时间戳：当天只显示时分，跨天带上日期 */
@@ -129,6 +146,8 @@ export default function App(): React.JSX.Element {
   const [closeToTray, setCloseToTray] = useState(true)
   const [cells, setCells] = useState<Record<string, string>>({})
   const [draftTask, setDraftTask] = useState('')
+  /** 新建待办时选的重复规则；默认不重复，加完自动回到不重复 */
+  const [newRepeat, setNewRepeat] = useState<string | null>(null)
   const [cellError, setCellError] = useState<string | null>(null)
   const [occurrences, setOccurrences] = useState<EventOccurrence[]>([])
   const [eventTitle, setEventTitle] = useState('')
@@ -136,6 +155,8 @@ export default function App(): React.JSX.Element {
   const [eventRepeat, setEventRepeat] = useState<RepeatPreset>('none')
   const [eventError, setEventError] = useState<string | null>(null)
   const [panel, setPanel] = useState<'none' | 'notes' | 'search' | 'settings'>('none')
+  /** 轮询探不到服务器时置真，只在顶栏亮一枚小标，不打断任何操作 */
+  const [offline, setOffline] = useState(false)
   const [snaps, setSnaps] = useState<SnapshotMeta[]>([])
   const [snapMsg, setSnapMsg] = useState<string | null>(null)
   /** 历史默认只露 5 条，多的点开看 */
@@ -225,9 +246,6 @@ export default function App(): React.JSX.Element {
       setSyncUsername(s.username)
       setSyncPaired(s.paired)
     })
-    const offSync = data.sync.onDone((r) => {
-      setSyncMsg(r.ok ? `同步完成：上传 ${r.pushed}，下载 ${r.pulled}` : '同步失败')
-    })
     void data.calendars.list().then((res) => {
       if (!res.ok) {
         setCalError(res.error)
@@ -236,7 +254,6 @@ export default function App(): React.JSX.Element {
       setCalendars(res.data)
       setActiveCal((prev) => prev ?? res.data[0]?.id ?? null)
     })
-    return offSync
   }, [])
 
   /** 保存服务器地址与本机设备名 */
@@ -353,14 +370,7 @@ export default function App(): React.JSX.Element {
 
   /** 回滚后把界面拉回与库一致：视图列表、当月日格、当月事件 */
   async function refresh(): Promise<void> {
-    const cal = await data.calendars.list()
-    if (cal.ok) {
-      setCalendars(cal.data)
-      setActiveCal((prev) =>
-        prev && cal.data.some((c) => c.id === prev) ? prev : (cal.data[0]?.id ?? null)
-      )
-    }
-    if (activeCal) await loadRange(activeCal)
+    await reloadAll()
   }
 
   async function loadSnaps(): Promise<void> {
@@ -432,7 +442,40 @@ export default function App(): React.JSX.Element {
   const [cellRows, setCellRows] = useState(3)
   const cellBodyProbe = useRef<HTMLDivElement | null>(null)
   const cellRowProbe = useRef<HTMLSpanElement | null>(null)
+  /* 换页时整片月历会重挂载；量行高的变量写在不会重挂载的 stage 上 */
   const gridRef = useRef<HTMLDivElement | null>(null)
+  /** 换页键：视图或月份变一次换一张；同月内增删任务不换，免得整片闪一下 */
+  const gridKey = `${activeCal}|${format(cursor, 'yyyy-MM')}`
+
+  /*
+   * 换页方向：只决定沿 X 从哪边进、往哪边退。
+   * 放在 ref 里算——同一帧就要用，走 state 会慢一帧。
+   */
+  const monthDir = useRef(1)
+  const prevCursor = useRef(cursor)
+  if (prevCursor.current !== cursor) {
+    monthDir.current = cursor.getTime() > prevCursor.current.getTime() ? 1 : -1
+    prevCursor.current = cursor
+  }
+  const dayDir = useRef(1)
+  const prevSelected = useRef(selected)
+  if (prevSelected.current !== selected) {
+    dayDir.current = (selected ?? '') > (prevSelected.current ?? '') ? 1 : -1
+    prevSelected.current = selected
+  }
+  /* 首次拿到视图（null → id）是加载完成，不是翻页：方向给 0，直接定格 */
+  const gridDir = useRef(1)
+  const prevGridKey = useRef(gridKey)
+  const prevGridCal = useRef(activeCal)
+  if (prevGridKey.current !== gridKey) {
+    const calChanged = prevGridCal.current !== activeCal
+    gridDir.current = prevGridCal.current === null ? 0 : calChanged ? 1 : monthDir.current
+    prevGridKey.current = gridKey
+    prevGridCal.current = activeCal
+  }
+  /* 系统要求减少动态时换页只淡入淡出，不留位移 */
+  const reduced = useReducedMotion()
+  const swapVariants: Variants = reduced ? fade : sheetSwap
 
   useLayoutEffect(() => {
     const body = cellBodyProbe.current
@@ -450,7 +493,7 @@ export default function App(): React.JSX.Element {
     const ro = new ResizeObserver(measure)
     ro.observe(body)
     return () => ro.disconnect()
-  }, [])
+  }, [gridKey])
 
   const days = useMemo(() => {
     const start = startOfWeek(startOfMonth(cursor), { weekStartsOn: 1 })
@@ -488,17 +531,52 @@ export default function App(): React.JSX.Element {
     [monthRange]
   )
 
+  /** 当前选中的日历：用 ref 让刷新函数保持稳定，订阅不必随状态重建 */
+  const activeCalRef = useRef<string | null>(null)
+  useEffect(() => {
+    activeCalRef.current = activeCal
+  }, [activeCal])
+
+  /**
+   * 从本地库整体重读一遍：日历列表 + 当月内容。
+   *
+   * 只重读日格是不够的：别的设备（手机 / AI / CLI）新建的日历写进 calendars 表以后，
+   * 侧栏不重读就永远看不见它 —— 用户看到的就是"手机上加的日历电脑上没有"。
+   */
+  const reloadAll = useCallback(async (): Promise<void> => {
+    const res = await data.calendars.list()
+    if (!res.ok) {
+      setCalError(res.error)
+      const cur = activeCalRef.current
+      if (cur) await loadRange(cur)
+      return
+    }
+    setCalendars(res.data)
+    setCalError(null)
+    const keep = activeCalRef.current
+    const next = keep && res.data.some((c) => c.id === keep) ? keep : (res.data[0]?.id ?? null)
+    // 选中的日历还在就原地刷新；被别的设备删了才换一个
+    if (next !== keep) setActiveCal(next)
+    if (next) await loadRange(next)
+  }, [loadRange])
+
   useEffect(() => {
     if (!activeCal) return
     void loadRange(activeCal)
   }, [activeCal, loadRange])
 
-  // 浮窗（或另一处编辑）改了数据时，主窗口立刻重读当前月份，不等用户翻月
+  // 浮窗、另一处编辑、或者一次同步带回了新数据：整块重读，别只翻日格
   useEffect(() => {
-    return data.onDataChanged(() => {
-      if (activeCal) void loadRange(activeCal)
+    return data.onDataChanged(() => void reloadAll())
+  }, [reloadAll])
+
+  // 同步跑完（含"立即同步"和后台每 5 分钟那次）：有下载就重读
+  useEffect(() => {
+    return data.sync.onDone((r) => {
+      setSyncMsg(r.ok ? `同步完成：上传 ${r.pushed}，下载 ${r.pulled}` : '同步失败')
+      if (r.ok && r.pulled > 0) void reloadAll()
     })
-  }, [activeCal, loadRange])
+  }, [reloadAll])
 
   /**
    * 热更新：定期问服务端"有没有新东西"。
@@ -514,13 +592,16 @@ export default function App(): React.JSX.Element {
       if (stopped) return
       try {
         const probe = await data.sync.changes()
-        if (!stopped && probe.changed) {
-          // 有新东西：先同步进本地库，再重读当前视图
+        if (stopped) return
+        // 连不上要能看见：以前失败和"没变更"都返回 changed:false，界面完全没提示
+        setOffline(probe.ok === false)
+        if (probe.changed) {
+          // 有新东西：先同步进本地库，再整块重读（日历列表也可能变了）
           await data.sync.run()
-          if (!stopped && activeCal) await loadRange(activeCal)
+          if (!stopped) await reloadAll()
         }
       } catch {
-        /* 网络不通就等下一轮 */
+        if (!stopped) setOffline(true)
       }
       if (!stopped) timer = setTimeout(() => void tick(), 5000)
     }
@@ -530,43 +611,258 @@ export default function App(): React.JSX.Element {
       stopped = true
       if (timer) clearTimeout(timer)
     }
-  }, [activeCal, loadRange])
+  }, [reloadAll])
 
   function applyCell(cell: DayCell): void {
     setCells((prev) => ({ ...prev, [cell.date]: cell.text }))
     setCellError(null)
   }
 
+  /**
+   * 本地先改，提交在后台跑。
+   *
+   * 桌面端写的是本地 SQLite，本来就不过网络，可界面还是干等一次 IPC 往返
+   * 才出新行 —— 写完再 applyCell(row) 的老路数，用户看到的是"按了没反应"。
+   * 现在先改内存，服务器/库回包以后再对齐，失败回滚。
+   */
+  function optimisticCell(date: string, nextText: string): void {
+    setCells((prev) => ({ ...prev, [date]: nextText }))
+    setCellError(null)
+  }
+
   async function addTask(date: string): Promise<void> {
     const text = draftTask.trim()
     if (!text || !activeCal) return
+    // 输入框右边的重复按钮选了规则：直接建一条会重复的待办（events 表，带 rrule）
+    if (newRepeat) {
+      const rule = newRepeat
+      /*
+       * 先在本地造一条临时记录画上去，再提交。
+       * 以前是"等回包 → 再整块重拉"，两趟。
+       */
+      const tempId = `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+      setOccurrences((prev) => [
+        ...prev,
+        {
+          date,
+          done: false,
+          event: {
+            id: tempId,
+            calendarId: activeCal,
+            kind: 'task',
+            title: text,
+            notes: null,
+            allDay: true,
+            start: date,
+            end: null,
+            rrule: rule,
+            remindMinutes: null,
+            targetDate: null,
+            color: null,
+            completed: false,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            deletedAt: null
+          }
+        }
+      ])
+      setDraftTask('')
+      // 加完回到"不重复"，下一次默认还是普通待办
+      setNewRepeat(null)
+      const created = await data.events.create({
+        calendarId: activeCal,
+        kind: 'task',
+        title: text,
+        start: date,
+        allDay: true,
+        rrule: rule
+      })
+      if (!created.ok) {
+        setOccurrences((prev) => prev.filter((x) => x.event.id !== tempId))
+        setEventError(created.error)
+        setDraftTask(text)
+        setNewRepeat(rule)
+        return
+      }
+      // 用真实记录换掉临时那条（拿到真 id，后续勾选/删除才对得上）
+      setOccurrences((prev) =>
+        prev.map((x) => (x.event.id === tempId ? { ...x, event: created.data } : x))
+      )
+      return
+    }
+    const base = cells[date] ?? ''
+    const nextText = base.trim() ? `${base.replace(/\s+$/, '')}\n${text}` : text
+    optimisticCell(date, nextText)
+    setDraftTask('')
     const res = await data.cells.appendLine(activeCal, date, text)
     if (!res.ok) {
+      // 回滚到提交前的样子，文字放回输入框
+      optimisticCell(date, base)
       setCellError(res.error)
+      setDraftTask(text)
       return
     }
     applyCell(res.data)
-    setDraftTask('')
   }
 
-  async function toggleLine(date: string, index: number, done: boolean): Promise<void> {
-    if (!activeCal) return
-    const res = await data.cells.setDone(activeCal, date, index, done)
-    if (!res.ok) {
-      setCellError(res.error)
-      return
-    }
-    applyCell(res.data)
+  /** 正在播完成动画的任务行：点上先原地播 300ms，播完才写库重排 */
+  const [pendingLine, setPendingLine] = useState<{ index: number; done: boolean } | null>(null)
+  const pendingLineTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (pendingLineTimer.current) clearTimeout(pendingLineTimer.current)
+    },
+    []
+  )
+
+  function toggleLine(date: string, index: number, done: boolean): void {
+    if (!activeCal || pendingLine !== null) return
+    setPendingLine({ index, done })
+    if (pendingLineTimer.current) clearTimeout(pendingLineTimer.current)
+    pendingLineTimer.current = setTimeout(() => {
+      setPendingLine(null)
+      void data.cells.setDone(activeCal, date, index, done).then((res) => {
+        if (res.ok) applyCell(res.data)
+        else setCellError(res.error)
+      })
+    }, 300)
   }
 
   async function removeLine(date: string, index: number): Promise<void> {
     if (!activeCal) return
+    // 先从界面上拿掉，再去删
+    const base = cells[date] ?? ''
+    const rest = splitLines(base)
+    rest.splice(index, 1)
+    optimisticCell(date, rest.join('\n'))
     const res = await data.cells.deleteLine(activeCal, date, index)
     if (!res.ok) {
+      optimisticCell(date, base)
       setCellError(res.error)
       return
     }
     applyCell(res.data)
+  }
+
+  /**
+   * 改某一行的重复规则。
+   *
+   * 数据上「不重复的待办」是日格里的一行文本，「会重复的待办」是 events 表里
+   * 一条 kind=task 的记录 —— 只有事件才带 rrule、才会在别的日期展开出现。
+   * 所以这里做的是两种形态之间的搬运：
+   *   - 文本行 → 选了规则：先建事件，成功后再删掉那行文本（顺序不能反，否则丢内容）
+   *   - 事件行 → 选了"不重复"：删事件，把标题写回当天一行文本
+   */
+  async function setRowRepeat(
+    item:
+      | { type: 'line'; index: number; text: string }
+      | { type: 'event'; occ: EventOccurrence },
+    rule: string | null
+  ): Promise<void> {
+    if (!activeCal || !selected) return
+    const date = selected
+
+    /*
+     * 一律先改本地再提交：
+     * 以前这里是"等写完 → 再整块重拉"，两趟往返。
+     * 现在界面立刻变形，提交在后台跑，失败整块回滚。
+     */
+    const snapCells = cells
+    const snapOcc = occurrences
+
+    if (item.type === 'event') {
+      const ev = item.occ.event
+      if (rule) {
+        setOccurrences((prev) =>
+          prev.map((x) =>
+            x.event.id === ev.id ? { ...x, event: { ...x.event, rrule: rule } } : x
+          )
+        )
+        const res = await data.events.update(ev.id, { rrule: rule })
+        if (!res.ok) {
+          setOccurrences(snapOcc)
+          setEventError(res.error)
+          return
+        }
+        return
+      }
+      // 事件 → 不重复：界面上换成一行文本
+      const rest = splitLines(snapCells[date] ?? '')
+      optimisticCell(date, rest.length ? `${rest.join('\n')}\n${ev.title}` : ev.title)
+      setOccurrences((prev) => prev.filter((x) => x.event.id !== ev.id))
+      const res = await data.events.remove(ev.id)
+      if (!res.ok) {
+        setOccurrences(snapOcc)
+        optimisticCell(date, snapCells[date] ?? '')
+        setEventError(res.error)
+        return
+      }
+      const back = await data.cells.appendLine(activeCal, date, ev.title)
+      if (!back.ok) {
+        setOccurrences(snapOcc)
+        optimisticCell(date, snapCells[date] ?? '')
+        setEventError(back.error)
+      }
+      return
+    }
+
+    if (!rule) return
+    const title = lineText(item.text)
+    if (!title) return
+    // 文本行 → 会重复的待办：本地先换形态
+    const tempId = `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+    const rest = splitLines(snapCells[date] ?? '')
+    rest.splice(item.index, 1)
+    optimisticCell(date, rest.join('\n'))
+    setOccurrences((prev) => [
+      ...prev,
+      {
+        date,
+        done: false,
+        event: {
+          id: tempId,
+          calendarId: activeCal,
+          kind: 'task',
+          title,
+          notes: null,
+          allDay: true,
+          start: date,
+          end: null,
+          rrule: rule,
+          remindMinutes: null,
+          targetDate: null,
+          color: null,
+          completed: false,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          deletedAt: null
+        }
+      }
+    ])
+    const created = await data.events.create({
+      calendarId: activeCal,
+      kind: 'task',
+      title,
+      start: date,
+      allDay: true,
+      rrule: rule
+    })
+    if (!created.ok) {
+      setOccurrences(snapOcc)
+      optimisticCell(date, snapCells[date] ?? '')
+      setEventError(created.error)
+      return
+    }
+    setOccurrences((prev) =>
+      prev.map((x) => (x.event.id === tempId ? { ...x, event: created.data } : x))
+    )
+    const gone = await data.cells.deleteLine(activeCal, date, item.index)
+    if (!gone.ok) {
+      // 事件建好了但原文本行没删掉：回滚，别留两份
+      setOccurrences(snapOcc)
+      optimisticCell(date, snapCells[date] ?? '')
+      setEventError(gone.error)
+    }
   }
 
   /* ------------------------------ 事件 ------------------------------ */
@@ -601,37 +897,80 @@ export default function App(): React.JSX.Element {
     if (!activeCal) return
     const title = eventTitle.trim()
     if (!title) return
+    const rule = ruleFromPreset(eventRepeat, date)
+    /*
+     * 先在本地造一条画上去，提交在后台跑。
+     * 以前是"等回包 → 再整块重拉当月"，两趟。
+     */
+    const tempId = `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+    setOccurrences((prev) => [
+      ...prev,
+      {
+        date,
+        done: false,
+        event: {
+          id: tempId,
+          calendarId: activeCal,
+          kind: eventKind,
+          title,
+          notes: null,
+          allDay: true,
+          start: date,
+          end: null,
+          rrule: rule,
+          remindMinutes: eventKind === 'reminder' ? 0 : null,
+          targetDate: eventKind === 'countdown' ? date : null,
+          color: null,
+          completed: false,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          deletedAt: null
+        }
+      }
+    ])
+    setEventTitle('')
+    setEventError(null)
     const res = await data.events.create({
       calendarId: activeCal,
       kind: eventKind,
       title,
       start: date,
-      rrule: ruleFromPreset(eventRepeat, date),
+      rrule: rule,
       targetDate: eventKind === 'countdown' ? date : null,
       remindMinutes: eventKind === 'reminder' ? 0 : null
     })
     if (!res.ok) {
-      setEventError(res.error)
-      return
-    }
-    setEventTitle('')
-    setEventError(null)
-    await loadRange(activeCal)
-  }
-
-  async function toggleEventDone(occ: EventOccurrence): Promise<void> {
-    const res = await data.events.setDone(occ.event.id, occ.date, !occ.done)
-    if (!res.ok) {
+      setOccurrences((prev) => prev.filter((x) => x.event.id !== tempId))
+      setEventTitle(title)
       setEventError(res.error)
       return
     }
     setOccurrences((prev) =>
+      prev.map((x) => (x.event.id === tempId ? { ...x, event: res.data } : x))
+    )
+  }
+
+  async function toggleEventDone(occ: EventOccurrence): Promise<void> {
+    // 先亮状态，提交在后台跑
+    const next = !occ.done
+    setOccurrences((prev) =>
       prev.map((item) =>
         item.event.id === occ.event.id && item.date === occ.date
-          ? { ...item, done: res.data.done }
+          ? { ...item, done: next }
           : item
       )
     )
+    const res = await data.events.setDone(occ.event.id, occ.date, next)
+    if (!res.ok) {
+      setOccurrences((prev) =>
+        prev.map((item) =>
+          item.event.id === occ.event.id && item.date === occ.date
+            ? { ...item, done: occ.done }
+            : item
+        )
+      )
+      setEventError(res.error)
+    }
   }
 
   /** 重复任务先问「只删本次 / 删整个重复」 */
@@ -645,23 +984,35 @@ export default function App(): React.JSX.Element {
 
   async function skipOne(): Promise<void> {
     if (!confirmDelete || !activeCal) return
-    const res = await data.events.skip(confirmDelete.event.id, confirmDelete.date)
-    if (!res.ok) {
-      setEventError(res.error)
-      return
-    }
+    /*
+     * 「仅删本次」在数据上是往 event_skip 里插一条，
+     * 列表时这一天的实例就被滤掉了 —— 所以界面上要把这一行整个拿掉，
+     * 不是标成完成。
+     */
+    const target = confirmDelete
+    const snapOcc = occurrences
+    setOccurrences((prev) =>
+      prev.filter((x) => !(x.event.id === target.event.id && x.date === target.date))
+    )
     setConfirmDelete(null)
-    await loadRange(activeCal)
+    const res = await data.events.skip(target.event.id, target.date)
+    if (!res.ok) {
+      setOccurrences(snapOcc)
+      setEventError(res.error)
+    }
   }
 
   /** 重复任务先问「只删本次 / 删整个重复」 */
   async function removeEvent(id: string): Promise<void> {
+    // 先从界面上拿掉
+    const snapOcc = occurrences
+    setOccurrences((prev) => prev.filter((x) => x.event.id !== id))
     const res = await data.events.remove(id)
     if (!res.ok) {
+      setOccurrences(snapOcc)
       setEventError(res.error)
       return
     }
-    if (activeCal) await loadRange(activeCal)
   }
 
   function countdownText(target: string | null, date: string): string | null {
@@ -684,13 +1035,22 @@ export default function App(): React.JSX.Element {
    * （事件按 createdAt，任务行按行号；稳定排序不会打乱组内次序）。
    */
   const selectedItems = [
+    // 先文本行（行号即创建顺序）、后重复待办（createdAt）；再按完成与否稳定排序。
+    // 这样"后创建的"不会因为存在 events 表里就跑到最上面。
+    ...selectedLines
+      .map((text, index) => ({
+        type: 'line' as const,
+        text,
+        index,
+        done: isDoneLine(text),
+        // pending 期间只改外观、不改排序字段：行留在原位播完 300ms 才重排（MIUI 笔记）
+        visualDone: pendingLine?.index === index ? pendingLine.done : isDoneLine(text)
+      }))
+      .filter((l) => l.text.trim().length > 0),
     ...selectedEvents
       .slice()
       .sort((a, b) => (a.event.createdAt ?? 0) - (b.event.createdAt ?? 0))
-      .map((occ) => ({ type: 'event' as const, occ, done: occ.done })),
-    ...selectedLines
-      .map((text, index) => ({ type: 'line' as const, text, index, done: isDoneLine(text) }))
-      .filter((l) => l.text.trim().length > 0)
+      .map((occ) => ({ type: 'event' as const, occ, done: occ.done, visualDone: occ.done }))
   ].sort((a, b) => Number(a.done) - Number(b.done))
 
   /* ------------------------------ 便签与搜索 ------------------------------ */
@@ -801,6 +1161,18 @@ export default function App(): React.JSX.Element {
         </div>
 
         <div className="titlebar-tools">
+          {offline && (
+            <button
+              className="net-chip"
+              title="连不上服务器，点一下重试"
+              onClick={() => {
+                void data.sync.run().then(() => reloadAll())
+              }}
+            >
+              <span className="net-chip-dot" />
+              离线
+            </button>
+          )}
           <button
             className={`tool-btn ${panel === 'search' ? 'active' : ''}`}
             onClick={() => setPanel(panel === 'search' ? 'none' : 'search')}
@@ -880,9 +1252,9 @@ export default function App(): React.JSX.Element {
             <motion.div
               className="month-label"
               key={format(cursor, 'yyyy-MM')}
-              initial={{ opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: DUR.base, ease: EASE_OUT }}
+              initial={{ opacity: 0, x: reduced ? 0 : 12 * monthDir.current }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: DUR.page, ease: EASE_EMPHASIZED }}
             >
               <strong>{format(cursor, 'yyyy年 M月', { locale: zhCN })}</strong>
               <span>{format(cursor, 'MMMM', { locale: zhCN })}</span>
@@ -915,8 +1287,8 @@ export default function App(): React.JSX.Element {
                 {calendars.length > 1 && (
                   <button
                     className="cal-del"
-                    title={`删除视图「${cal.name}」`}
-                    aria-label={`删除视图 ${cal.name}`}
+                    title={`删除日历「${cal.name}」`}
+                    aria-label={`删除日历 ${cal.name}`}
                     onClick={(e) => {
                       e.stopPropagation()
                       void removeCalendar(cal.id)
@@ -934,7 +1306,7 @@ export default function App(): React.JSX.Element {
                 autoFocus
                 value={draftName}
                 maxLength={24}
-                placeholder="视图名称，回车创建"
+                placeholder="日历名称，回车创建"
                 onChange={(e) => setDraftName(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') void submitNew()
@@ -950,7 +1322,7 @@ export default function App(): React.JSX.Element {
             ) : (
               <button className="cal-new" onClick={() => setAdding(true)}>
                 <Plus />
-                新建视图
+                新建日历
               </button>
             )}
 
@@ -982,60 +1354,74 @@ export default function App(): React.JSX.Element {
               </div>
             ))}
           </div>
-          <div className="grid" ref={gridRef}>
-            {days.map((day, dayIndex) => {
-              const key = format(day, 'yyyy-MM-dd')
-              const lines = splitLines(cells[key] ?? '')
-              const dayEvents = eventsByDate[key] ?? []
-              const outside = !isSameMonth(day, cursor)
-              const fit = layoutCell(dayEvents.length, lines.length, cellRows)
-              return (
-                <button
-                  key={key}
-                  className={`cell ${outside ? 'outside' : ''} ${key === selected ? 'selected' : ''}`}
-                  onClick={() => setSelected(key)}
-                  aria-pressed={key === selected}
-                >
-                  <span className={`daynum ${isToday(day) ? 'today' : ''}`}>{format(day, 'd')}</span>
-                  <div
-                    className="cell-body"
-                    ref={dayIndex === 0 ? cellBodyProbe : undefined}
-                  >
-                    {dayIndex === 0 && (
-                      <span className="cell-row-probe" ref={cellRowProbe} aria-hidden="true" />
-                    )}
-                    {fit.ev > 0 && (
-                      <div className="cell-events">
-                        {dayEvents.slice(0, fit.ev).map((occ) => (
-                          <span
-                            key={`${occ.event.id}-${occ.date}`}
-                            className={`ev ${occ.done ? 'done' : ''}`}
-                          >
-                            <i
-                              className="ev-dot"
-                              style={{
-                                background: occ.event.color ?? current?.color ?? 'var(--accent)'
-                              }}
-                            />
-                            {occ.event.title}
-                          </span>
-                        ))}
+          <div className="grid-stage" ref={gridRef}>
+            <AnimatePresence initial={false} custom={gridDir.current}>
+              <motion.div
+                key={gridKey}
+                className="grid"
+                custom={gridDir.current}
+                variants={swapVariants}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+              >
+                {days.map((day, dayIndex) => {
+                  const key = format(day, 'yyyy-MM-dd')
+                  const lines = splitLines(cells[key] ?? '')
+                  const dayEvents = eventsByDate[key] ?? []
+                  const outside = !isSameMonth(day, cursor)
+                  const fit = layoutCell(dayEvents.length, lines.length, cellRows)
+                  return (
+                    <button
+                      key={key}
+                      className={`cell ${outside ? 'outside' : ''} ${key === selected ? 'selected' : ''}`}
+                      onClick={() => setSelected(key)}
+                      aria-pressed={key === selected}
+                    >
+                      <span className={`daynum ${isToday(day) ? 'today' : ''}`}>
+                        {format(day, 'd')}
+                      </span>
+                      <div
+                        className="cell-body"
+                        ref={dayIndex === 0 ? cellBodyProbe : undefined}
+                      >
+                        {dayIndex === 0 && (
+                          <span className="cell-row-probe" ref={cellRowProbe} aria-hidden="true" />
+                        )}
+                        {fit.ev > 0 && (
+                          <div className="cell-events">
+                            {dayEvents.slice(0, fit.ev).map((occ) => (
+                              <span
+                                key={`${occ.event.id}-${occ.date}`}
+                                className={`ev ${occ.done ? 'done' : ''}`}
+                              >
+                                <i
+                                  className="ev-dot"
+                                  style={{
+                                    background: occ.event.color ?? current?.color ?? 'var(--accent)'
+                                  }}
+                                />
+                                {occ.event.title}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {fit.ln > 0 && (
+                          <div className="cell-lines">
+                            {lines.slice(0, fit.ln).map((line, i) => (
+                              <span key={i} className={`line ${isDoneLine(line) ? 'done' : ''}`}>
+                                {lineText(line)}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {fit.hidden > 0 && <span className="cell-more">+{fit.hidden}</span>}
                       </div>
-                    )}
-                    {fit.ln > 0 && (
-                      <div className="cell-lines">
-                        {lines.slice(0, fit.ln).map((line, i) => (
-                          <span key={i} className={`line ${isDoneLine(line) ? 'done' : ''}`}>
-                            {lineText(line)}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    {fit.hidden > 0 && <span className="cell-more">+{fit.hidden}</span>}
-                  </div>
-                </button>
-              )
-            })}
+                    </button>
+                  )
+                })}
+              </motion.div>
+            </AnimatePresence>
           </div>
         </main>
 
@@ -1061,178 +1447,126 @@ export default function App(): React.JSX.Element {
               initial="initial"
               animate="animate"
               exit="exit"
-              transition={PANEL}
             >
               {/* 左边缘可拖动改宽度 */}
               <div className="detail-resizer" onPointerDown={startResize} />
-              <header>
-                <div>
-                  <h3>{format(parseLocalDate(selected), 'M月d日 EEEE', { locale: zhCN })}</h3>
-                  <p>{current?.name ?? ''}</p>
-                </div>
-                <button className="ghost" onClick={() => setSelected(null)}>
-                  关闭
-                </button>
-              </header>
-              <div className="detail-body">
-                {/* 任务和事件是同一件事：任务 = 只属于这一天，事件 = 可以重复。
-                    这里合成一个列表，不再分成两段。 */}
-                {selectedItems.length === 0 ? (
-                  <p className="empty">这天还没有内容</p>
-                ) : (
-                  selectedItems.map((item) =>
-                    item.type === 'event' ? (
-                      <motion.div
-                        key={`ev-${item.occ.event.id}-${item.occ.date}`}
-                        layout
-                        transition={DROPLET}
-                        className={`task-row ${item.occ.done ? 'done' : ''}`}
-                      >
-                        {item.occ.event.kind === 'countdown' ? (
-                          <span className="checkbox-spacer" />
-                        ) : (
-                          <button
-                            className={`checkbox ${item.occ.done ? 'checked' : ''}`}
-                            aria-label={item.occ.done ? '标记为未完成' : '标记为完成'}
-                            onClick={() => void toggleEventDone(item.occ)}
-                          >
-                            {item.occ.done && <Check />}
-                          </button>
-                        )}
-                        <span className="task-text">{item.occ.event.title}</span>
-                        {item.occ.event.kind === 'countdown' && (
-                          <span className="ev-meta">
-                            {countdownText(item.occ.event.targetDate, item.occ.date)}
-                          </span>
-                        )}
-                        {item.occ.event.rrule && (
-                          <span className="ev-meta">{describeRrule(item.occ.event.rrule)}</span>
-                        )}
-                        <button
-                          className="task-del"
-                          aria-label="删除事件"
-                          title="删除事件"
-                          onClick={() => void requestRemoveEvent(item.occ)}
-                        >
-                          <Trash />
-                        </button>
-                      </motion.div>
-                    ) : (
-                      <motion.div
-                        key={`ln-${item.index}-${item.text}`}
-                        layout
-                        transition={DROPLET}
-                        className={`task-row ${item.done ? 'done' : ''}`}
-                      >
-                        <button
-                          className={`checkbox ${item.done ? 'checked' : ''}`}
-                          aria-label={item.done ? '标记为未完成' : '标记为完成'}
-                          onClick={() => void toggleLine(selected, item.index, !item.done)}
-                        >
-                          {item.done && <Check />}
-                        </button>
-                        <span className="task-text">{lineText(item.text)}</span>
-                        <button
-                          className="task-del"
-                          aria-label="删除这条任务"
-                          title="删除这条任务"
-                          onClick={() => void removeLine(selected, item.index)}
-                        >
-                          <Trash />
-                        </button>
-                      </motion.div>
-                    )
-                  )
-                )}
+              <div className="detail-stage">
+                <AnimatePresence initial={false} custom={dayDir.current}>
+                  <motion.div
+                    key={selected}
+                    className="detail-main"
+                    custom={dayDir.current}
+                    variants={swapVariants}
+                    initial="initial"
+                    animate="animate"
+                    exit="exit"
+                  >
+                    <header>
+                      <div>
+                        <h3>{format(parseLocalDate(selected), 'M月d日 EEEE', { locale: zhCN })}</h3>
+                        <p>{current?.name ?? ''}</p>
+                      </div>
+                      <button className="ghost" onClick={() => setSelected(null)}>
+                        关闭
+                      </button>
+                    </header>
+                    <div className="detail-body">
+                      {/* 任务和事件是同一件事：任务 = 只属于这一天，事件 = 可以重复。
+                          这里合成一个列表，不再分成两段。 */}
+                      {selectedItems.length === 0 ? (
+                        <p className="empty">这一天还没有安排</p>
+                      ) : (
+                        selectedItems.map((item) =>
+                          item.type === 'event' ? (
+                            <motion.div
+                              key={`ev-${item.occ.event.id}-${item.occ.date}`}
+                              layout
+                              transition={DROPLET}
+                              className={`task-row ${item.occ.done ? 'done' : ''}`}
+                            >
+                              {item.occ.event.kind === 'countdown' ? (
+                                <span className="checkbox-spacer" />
+                              ) : (
+                                <button
+                                  className={`checkbox ${item.occ.done ? 'checked' : ''}`}
+                                  aria-label={item.occ.done ? '标记为未完成' : '标记为完成'}
+                                  onClick={() => void toggleEventDone(item.occ)}
+                                >
+                                  {item.occ.done && <Check />}
+                                </button>
+                              )}
+                              <span className="task-text">
+                                <span className="task-label">{item.occ.event.title}</span>
+                              </span>
+                              {item.occ.event.kind === 'countdown' && (
+                                <span className="ev-meta">
+                                  {countdownText(item.occ.event.targetDate, item.occ.date)}
+                                </span>
+                              )}
+                              {item.occ.event.rrule && (
+                                <span className="ev-meta">{describeRrule(item.occ.event.rrule)}</span>
+                              )}
+                              <button
+                                className="task-del"
+                                aria-label="删除待办"
+                                title="删除待办"
+                                onClick={() => void requestRemoveEvent(item.occ)}
+                              >
+                                <X />
+                              </button>
+                            </motion.div>
+                          ) : (
+                            <motion.div
+                              // key 用稳定身份：勾选后文案变化不重建，删除线动画才有起点
+                              key={`ln-${lineText(item.text)}#${item.index}`}
+                              layout
+                              transition={DROPLET}
+                              className={`task-row ${item.visualDone ? 'done' : ''}`}
+                            >
+                              <button
+                                className={`checkbox ${item.visualDone ? 'checked' : ''}`}
+                                aria-label={item.done ? '标记为未完成' : '标记为完成'}
+                                onClick={() => toggleLine(selected, item.index, !item.done)}
+                              >
+                                {item.visualDone && <Check />}
+                              </button>
+                              <span className="task-text">
+                                <span className="task-label">{lineText(item.text)}</span>
+                              </span>
+                              <button
+                                className="task-del"
+                                aria-label="删除这条待办"
+                                title="删除这条待办"
+                                onClick={() => void removeLine(selected, item.index)}
+                              >
+                                <X />
+                              </button>
+                            </motion.div>
+                          )
+                        )
+                      )}
+                    </div>
+                  </motion.div>
+                </AnimatePresence>
               </div>
               <footer>
-                <input
-                  className="task-input"
-                  value={draftTask}
-                  maxLength={200}
-                  placeholder="添加一条任务，回车保存"
-                  onChange={(e) => setDraftTask(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') void addTask(selected)
-                  }}
-                />
-
-                {/* 事件 = 可以重复的任务。默认折叠：日常只用当天任务输入框 */}
-                <button
-                  className={`event-toggle ${eventOpen ? 'open' : ''}`}
-                  onClick={() => setEventOpen((v) => !v)}
-                  aria-expanded={eventOpen}
-                >
-                  <span className="event-toggle-chev">
-                    <ChevronRight />
-                  </span>
-                  {eventOpen ? '收起事件选项' : '展开事件选项'}
-                </button>
-
-                <AnimatePresence initial={false}>
-                  {eventOpen && (
-                    <motion.div
-                      className="event-add"
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: 'auto', opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-                    >
-                      <input
-                        className="task-input"
-                        value={eventTitle}
-                        maxLength={200}
-                        placeholder="事件标题，回车保存"
-                        onChange={(e) => setEventTitle(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') void addEvent(selected)
-                        }}
-                      />
-                      <div className="event-opts">
-                        <select
-                          className="mini-select"
-                          value={eventRepeat}
-                          disabled={eventKind === 'countdown'}
-                          title={eventKind === 'countdown' ? '倒数日不支持重复' : '重复规则'}
-                          onChange={(e) => setEventRepeat(e.target.value as RepeatPreset)}
-                        >
-                          {(Object.keys(REPEAT_LABEL) as RepeatPreset[]).map((k) => (
-                            <option key={k} value={k}>
-                              {REPEAT_LABEL[k]}
-                            </option>
-                          ))}
-                        </select>
-                        <select
-                          className="mini-select"
-                          value={eventKind}
-                          onChange={(e) => {
-                            const next = e.target.value as EventKind
-                            setEventKind(next)
-                            if (next === 'countdown') setEventRepeat('none')
-                          }}
-                        >
-                          <option value="task">任务</option>
-                          <option value="reminder">提醒</option>
-                          <option value="countdown">倒数日</option>
-                        </select>
-                      </div>
-                      {eventRepeat === 'custom' && (
-                        <div className="custom-repeat">
-                          <span className="custom-repeat-label">每</span>
-                          <input
-                            className="task-input custom-repeat-input"
-                            type="number"
-                            min={1}
-                            max={365}
-                            value={customDays}
-                            onChange={(e) => setCustomDays(Number(e.target.value) || 1)}
-                          />
-                          <span className="custom-repeat-label">天重复一次</span>
-                        </div>
-                      )}
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+                <div className="task-add-row">
+                  <input
+                    className="task-input"
+                    value={draftTask}
+                    maxLength={200}
+                    placeholder="添加一条待办，回车保存"
+                    onChange={(e) => setDraftTask(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void addTask(selected)
+                    }}
+                  />
+                  <RepeatChip
+                    rule={newRepeat}
+                    baseDate={selected}
+                    onChange={(rule) => setNewRepeat(rule)}
+                  />
+                </div>
 
                 {(cellError || eventError) && <p className="cal-error">{cellError ?? eventError}</p>}
               </footer>
@@ -1261,7 +1595,6 @@ export default function App(): React.JSX.Element {
                 initial="initial"
                 animate="animate"
                 exit="exit"
-                transition={PANEL}
               >
               <header className="panel-head">
                 <h3>
@@ -1308,10 +1641,7 @@ export default function App(): React.JSX.Element {
                   <section className="set-block">
                     <span className="pop-label">启动</span>
                     <div className="pop-row">
-                      <div>
-                        <span className="pop-label-row">开机自启动</span>
-                        <p className="pop-desc">登录 Windows 后自动启动到托盘，不弹主窗口</p>
-                      </div>
+                      <span className="pop-label-row">开机自启动</span>
                       <button
                         role="switch"
                         aria-checked={autoStart}
@@ -1326,14 +1656,7 @@ export default function App(): React.JSX.Element {
                       </button>
                     </div>
                     <div className="pop-row">
-                      <div>
-                        <span className="pop-label-row">关闭后进入托盘</span>
-                        <p className="pop-desc">
-                          {closeToTray
-                            ? '收进托盘继续后台同步，从托盘菜单退出'
-                            : '直接退出程序，后台不再同步'}
-                        </p>
-                      </div>
+                      <span className="pop-label-row">关闭后进入托盘</span>
                       <button
                         role="switch"
                         aria-checked={closeToTray}
@@ -1351,10 +1674,7 @@ export default function App(): React.JSX.Element {
 
                   <section className="set-block">
                     <div className="pop-row">
-                      <div>
-                        <span className="pop-label-row">桌面浮窗</span>
-                        <p className="pop-desc">常驻右下角的任务浮窗，不开主窗口也能用</p>
-                      </div>
+                      <span className="pop-label-row">桌面浮窗</span>
                       <button
                         role="switch"
                         aria-checked={miniVisible}
@@ -1376,11 +1696,7 @@ export default function App(): React.JSX.Element {
                     <div className="sync-server">
                       <input
                         className="task-input"
-                        placeholder={
-                          DEFAULT_SERVER_URL
-                            ? `服务器地址（留空 = ${DEFAULT_SERVER_URL}）`
-                            : '服务器地址，例如 https://caldesk.workers.dev'
-                        }
+                        placeholder={DEFAULT_SERVER_URL || '服务器地址'}
                         value={syncUrl}
                         autoCapitalize="none"
                         autoCorrect="off"
@@ -1394,14 +1710,9 @@ export default function App(): React.JSX.Element {
                     {syncPaired ? (
                       <div className="sync-paired">
                         <div className="pop-row">
-                          <div>
-                            <span className="pop-label-row">{syncUsername || '已登录'}</span>
-                            <p className="pop-desc">
-                              {syncUsername
-                                ? '其他设备用同一个账号登录，读写同一份日历'
-                                : '这个账号还没有用户名密码'}
-                            </p>
-                          </div>
+                          <span className="pop-label-row">
+                            {syncUsername || '配对账号 · 未设密码'}
+                          </span>
                           <button className="ghost" onClick={() => void logoutSync()}>
                             退出登录
                           </button>
@@ -1409,9 +1720,6 @@ export default function App(): React.JSX.Element {
 
                         {!syncUsername && (
                           <div className="sync-create">
-                            <p className="pop-desc">
-                              这是配对时代创建的账号：设置一组用户名密码，手机或另一台电脑就能直接登录。
-                            </p>
                             <input
                               className="task-input"
                               placeholder="用户名"
@@ -1422,7 +1730,7 @@ export default function App(): React.JSX.Element {
                             <input
                               className="task-input"
                               type="password"
-                              placeholder="密码（至少 10 位，含大小写、数字、符号）"
+                              placeholder="密码"
                               value={authPassword}
                               onChange={(e) => setAuthPassword(e.target.value)}
                             />
@@ -1468,7 +1776,7 @@ export default function App(): React.JSX.Element {
                                   <button
                                     className="ghost"
                                     onClick={() => void revokeDevice(d.deviceId)}
-                                    title="撤销这台设备的凭据并从列表删除"
+                                    title="删除这台设备"
                                   >
                                     删除
                                   </button>
@@ -1505,14 +1813,14 @@ export default function App(): React.JSX.Element {
                         <input
                           className="task-input"
                           type="password"
-                          placeholder="密码（至少 10 位，含大小写、数字、符号）"
+                          placeholder="密码"
                           value={authPassword}
                           onChange={(e) => setAuthPassword(e.target.value)}
                         />
                         {authMode === 'register' && (
                           <input
                             className="task-input"
-                            placeholder="邀请码（服务器设置了才需要）"
+                            placeholder="邀请码"
                             value={authInvite}
                             onChange={(e) => setAuthInvite(e.target.value)}
                           />
@@ -1529,9 +1837,6 @@ export default function App(): React.JSX.Element {
                             {authBusy ? '处理中…' : authMode === 'login' ? '登录' : '注册并登录'}
                           </button>
                         </div>
-                        <p className="pop-desc">
-                          同一账号在任意设备登录，都读写同一份日历；换设备不需要配对。
-                        </p>
                       </div>
                     )}
                     {syncMsg && <span className="hint">{syncMsg}</span>}
@@ -1542,9 +1847,6 @@ export default function App(): React.JSX.Element {
                       <span className="pop-label">历史与回滚</span>
                       <span className="set-count">{snaps.length} / 100</span>
                     </div>
-                    <p className="pop-desc">
-                      每次改动记一个时间点；点哪个点就回到哪个点，不新增记录。
-                    </p>
                     {snaps.length === 0 ? (
                       <p className="empty">还没有可回滚的记录</p>
                     ) : (
@@ -1599,7 +1901,7 @@ export default function App(): React.JSX.Element {
                     className="task-input"
                     autoFocus
                     value={query}
-                    placeholder="搜索任务 / 事件 / 便签"
+                    placeholder="搜索待办 / 便签"
                     onChange={(e) => setQuery(e.target.value)}
                   />
                   <div className="panel-body">
@@ -1613,7 +1915,7 @@ export default function App(): React.JSX.Element {
                           onClick={() => void jumpTo(hit)}
                         >
                           <span className="ev-kind">
-                            {hit.type === 'task' ? '任务' : hit.type === 'event' ? '事件' : '便签'}
+                            {hit.type === 'task' ? '待办' : hit.type === 'event' ? '待办' : '便签'}
                           </span>
                           <span className="result-title">{hit.title}</span>
                           <span className="ev-meta">{hit.date}</span>
@@ -1674,7 +1976,7 @@ export default function App(): React.JSX.Element {
                               void removeNote(n.id)
                             }}
                           >
-                            <Trash />
+                            <X />
                           </button>
                         </div>
                       ))
@@ -1704,12 +2006,17 @@ export default function App(): React.JSX.Element {
               className="confirm-card"
               initial={{ opacity: 0, scale: 0.97, y: 8 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.98, y: 4 }}
-              transition={PANEL}
+              exit={{
+                opacity: 0,
+                scale: 0.98,
+                y: 4,
+                transition: { duration: DUR.fast, ease: EASE_IN }
+              }}
+              transition={{ duration: DUR.page, ease: EASE_EMPHASIZED }}
               onClick={(e) => e.stopPropagation()}
             >
-              <h3>删除重复任务</h3>
-              <p>「{confirmDelete.event.title}」是重复任务，要删除哪一部分？</p>
+              <h3>删除重复待办</h3>
+              <p>「{confirmDelete.event.title}」是重复待办，要删除哪一部分？</p>
               <div className="confirm-actions">
                 <button className="ghost" onClick={() => setConfirmDelete(null)}>
                   取消

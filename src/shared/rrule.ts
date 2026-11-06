@@ -215,14 +215,27 @@ export function describeRrule(rule: string | null): string {
   if (!rule) return '不重复'
   const p = parseRrule(rule)
   const n = p.interval
-  const dayNames = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
+  const dayNames = ['一', '二', '三', '四', '五', '六', '日']
+  /**
+   * 星期几的中文读法：
+   *   一个 → 每周三
+   *   多个 → 每周一、周三（每个都带"周"，不然"每周一、三"容易读成一和十三）
+   */
+  const weekly = (): string => {
+    if (!p.byday || p.byday.length === 0) return '每周'
+    const names = p.byday.map((d) => dayNames[d])
+    return names.length === 1 ? `每周${names[0]}` : `每周${names[0]}、周${names.slice(1).join('、周')}`
+  }
+  /** 每 N 周：要说清是那几周的星期几，不能拼成"每 2 每周三" */
+  const weeklyEvery = (every: number): string => {
+    const names = p.byday?.map((d) => dayNames[d]) ?? []
+    return names.length === 0 ? `每 ${every} 周` : `每 ${every} 周的周${names.join('、周')}`
+  }
   switch (p.freq) {
     case 'DAILY':
       return n === 1 ? '每天' : `每 ${n} 天`
     case 'WEEKLY':
-      return n === 1
-        ? `每周${p.byday ? p.byday.map((d) => dayNames[d]).join('、') : ''}`
-        : `每 ${n} 周${p.byday ? ' ' + p.byday.map((d) => dayNames[d]).join('、') : ''}`
+      return n === 1 ? weekly() : weeklyEvery(n)
     case 'MONTHLY':
       return n === 1 ? '每月' : `每 ${n} 个月`
     case 'YEARLY':

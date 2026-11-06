@@ -6,6 +6,7 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     />
+    <meta name="color-scheme" content="light dark" />
     <!-- 状态栏跟着主题走：浅色是纸，深色是墨 -->
     <meta name="theme-color" content="#eef1f5" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#0c0e12" media="(prefers-color-scheme: dark)" />
@@ -16,9 +17,11 @@
     <title>caldesk</title>
     <style>
       /*
-       * 启动画面必须写在这里，不能放进 JS 里的样式表。
-       * React 的 CSS 是随 bundle 一起加载的：JS 跑起来之前页面没有任何样式，
-       * 默认就是一片白 —— 这就是之前白屏的来源。内联这段之后首帧就是纸色 + 图标。
+       * 没有启动页。
+       *
+       * 这里只写网页自己的底色：系统开屏（styles.xml 里的 launch_bg）用的是同一个色，
+       * 所以点开图标是这张纸，React 首帧画出来还是这张纸，中间没有图标要淡出，
+       * 也没有第二层遮罩要等。省掉的就是白屏时间。
        */
       html,
       body {
@@ -26,52 +29,16 @@
         height: 100%;
         background: #eef1f5;
       }
-      #boot {
-        position: fixed;
-        inset: 0;
-        z-index: 9999;
-        display: grid;
-        place-items: center;
-        background: #eef1f5;
-        transition: opacity 220ms ease;
-      }
-      #boot.gone {
-        opacity: 0;
-        pointer-events: none;
-      }
-      #boot svg {
-        width: 76px;
-        height: 76px;
-        border-radius: 18px;
-        box-shadow: 0 12px 32px rgba(17, 22, 30, 0.18);
-      }
       @media (prefers-color-scheme: dark) {
         html,
         body {
           background: #0c0e12;
-        }
-        #boot {
-          background: #0c0e12;
-        }
-        #boot svg {
-          box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
         }
       }
     </style>
   </head>
   <body>
     <div id="root"></div>
-    <!-- 首帧启动画面：React 准备好之后由 mobile.tsx 淡出移除 -->
-    <div id="boot" aria-hidden="true">
-      <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-        <rect width="24" height="24" rx="5.4" fill="#2f6bff" />
-        <g fill="none" stroke="#ffffff" stroke-width="1.4">
-          <rect x="3.6" y="3.6" width="16.8" height="16.8" rx="3.6" />
-          <path d="M3.8 10.6h16.4M10.6 3.8v16.4" />
-        </g>
-        <path d="M7.8 3.6h2.8v7h-7V7.4a3.8 3.8 0 0 1 3.8-3.8Z" fill="#ffffff" />
-      </svg>
-    </div>
     <script type="module" src="/src/mobile.tsx"></script>
   </body>
 </html>

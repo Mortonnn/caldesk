@@ -19,7 +19,7 @@ import type {
   SearchHit,
   SnapshotMeta
 } from '@shared/types'
-import { isDoneLine, lineText, markDone, splitLines } from '@shared/types'
+import { CALENDAR_COLORS, isDoneLine, lineText, markDone, splitLines, nextCalendarColor } from '@shared/types'
 import { expandRrule, fromDayNumber, parseRrule, toDayNumber } from '@shared/rrule'
 
 interface StatementLike {
@@ -131,16 +131,7 @@ const DEFAULT_CALENDARS: Array<{ name: string; color: string }> = [
   { name: '生活', color: '#3ddc97' }
 ]
 
-export const CALENDAR_COLORS = [
-  '#5b8cff',
-  '#3ddc97',
-  '#ffb020',
-  '#ff6b6b',
-  '#a78bfa',
-  '#22d3ee',
-  '#f472b6',
-  '#94a3b8'
-]
+export { CALENDAR_COLORS }
 
 function rowToCalendar(row: Record<string, unknown>): CalendarMeta {
   return {
@@ -245,8 +236,8 @@ export function createCalendar(name: string, color?: string): CalendarMeta {
   const maxRow = conn.prepare('SELECT COALESCE(MAX(sort), -1) AS m FROM calendars').get()
   const sort = Number(maxRow?.m ?? -1) + 1
 
-  const usedColors = new Set(listCalendars().map((c) => c.color))
-  const nextColor = color ?? CALENDAR_COLORS.find((c) => !usedColors.has(c)) ?? CALENDAR_COLORS[0]
+  // 配色规则和手机端共用一份（@shared）：取第一支没用过的
+  const nextColor = color ?? nextCalendarColor(listCalendars().map((c) => c.color))
 
   const now = Date.now()
   const id = randomUUID()

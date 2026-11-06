@@ -25,6 +25,7 @@
   --m-on-accent: #ffffff;
   --m-event: #d98a1f;
   --m-danger: #d92d20;
+  --m-danger-soft: rgba(217, 45, 32, 0.09);
 
   --m-radius: 16px;
   --m-radius-sm: 12px;
@@ -33,11 +34,73 @@
   --m-safe-bottom: env(safe-area-inset-bottom, 0px);
   --m-dock-h: 56px;
 
-  /* 动效：与桌面端、与 FlClash 同源 */
-  --m-ease: cubic-bezier(0.05, 0.7, 0.1, 1);
-  --m-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
-  --m-t-fast: 140ms;
+  /* 动效：一条曲线 + 五档时长。（桌面端在 motion.ts 里是同一套拼音）
+     曲线少、时长少，界面才不像在抽搐：反馈短，进场中等，换页最长。 */
+  --m-ease: cubic-bezier(0.2, 0, 0, 1);
+  --m-ease-out: cubic-bezier(0.05, 0.7, 0.1, 1);
+  /*
+    药丸的两条边是两条独立的弹簧：左边 damping 0.7 / 响应 400ms，
+    右边 damping 0.75 / 响应 500ms（从系统日历底栏量的）。
+    弹簧用 linear() 采样成曲线 —— CSS 没有 spring 缓动，采样是最接近的做法：
+    会先冲过去 4% 再收回来，两条边速度不同，所以移动途中药丸会先拉长再收拢。
+  */
+  --m-ease-edge-l: linear(0, 0.031, 0.1089, 0.2147, 0.3335, 0.4544, 0.5696, 0.6742, 0.7654,
+    0.842, 0.9041, 0.9526, 0.9887, 1.0144, 1.0312, 1.041, 1.0454, 1.0457, 1.0433, 1.0391, 1.0339,
+    1.0284, 1.0229, 1.0178, 1.0132, 1.0093, 1.006, 1.0034, 1.0014, 1, 0.999, 0.9983, 0.998);
+  --m-ease-edge-r: linear(0, 0.0307, 0.1072, 0.2101, 0.3248, 0.4407, 0.5509, 0.6508, 0.738, 0.8117,
+    0.8721, 0.9201, 0.9569, 0.9841, 1.0033, 1.0161, 1.0237, 1.0274, 1.0284, 1.0274, 1.0251,
+    1.0222, 1.0189, 1.0156, 1.0125, 1.0097, 1.0072, 1.0052, 1.0035, 1.0022, 1.0012, 1.0004,
+    0.9999);
+  /** 图标选中放大：同样的弹簧族，damping 0.82 / 响应 320ms */
+  --m-ease-icon: linear(0, 0.0304, 0.105, 0.204, 0.3132, 0.4228, 0.5264, 0.6204, 0.7027, 0.7729,
+    0.8311, 0.8784, 0.916, 0.945, 0.9669, 0.983, 0.9944, 1.002, 1.0069, 1.0096, 1.0109, 1.0111,
+    1.0106, 1.0096, 1.0085, 1.0073, 1.0061, 1.0049, 1.0039, 1.0031, 1.0023, 1.0017, 1.0012);
+  /* 选中日的方块落下去时那一下轻微过冲 */
+  --m-ease-pop: cubic-bezier(0.3, 0.5, 0.7, 1.2);
+  --m-t-tap: 120ms;
+  --m-t-fast: 160ms;
   --m-t-base: 220ms;
+  --m-t-page: 300ms;
+  --m-t-sheet: 320ms;
+  /* 弹簧要留出回弹和收尾的时间，所以比"响应"长一点（1.35 倍） */
+  --m-t-edge-l: 540ms;
+  --m-t-edge-r: 675ms;
+  --m-t-icon: 432ms;
+
+  /*
+    FlClash 的弹簧（lib/ui/navigation_dock.dart / motion.dart），
+    按 Flutter 的 SpringDescription 采样成 linear()：
+      travel  400ms bounce .15 → stiffness 247 / ratio .85，松手吸附、弹层进出
+      settle  500ms bounce .32 → stiffness 158 / ratio .68，落定（尾巴会过冲 5%）
+      press   311 / .59         ，按压回弹
+      droplet 165 / .80         ，勾选、轻提示这类小物件
+  */
+  --m-spring-travel: linear(0, 0.0206, 0.0728, 0.145, 0.2282, 0.3158, 0.4031, 0.4867, 0.5646,
+    0.6354, 0.6987, 0.7542, 0.8022, 0.8432, 0.8776, 0.9063, 0.9298, 0.9488, 0.9639, 0.9758, 0.985,
+    0.9919, 0.9971, 1.0007, 1.0033, 1.0049, 1.0058, 1.0062, 1.0063, 1.0061, 1.0057);
+  --m-spring-settle: linear(0, 0.0321, 0.1129, 0.2225, 0.3455, 0.4704, 0.5889, 0.696, 0.7885,
+    0.8655, 0.9269, 0.9739, 1.0081, 1.0313, 1.0455, 1.0525, 1.0543, 1.0522, 1.0476, 1.0415, 1.0348,
+    1.028, 1.0217, 1.0159, 1.011, 1.0069, 1.0037, 1.0012, 0.9994, 0.9982, 0.9975);
+  --m-spring-press: linear(0, 0.0421, 0.1473, 0.288, 0.4419, 0.593, 0.7299, 0.8463, 0.9391,
+    1.0083, 1.0556, 1.084, 1.0969, 1.0982, 1.0914, 1.0793, 1.0647, 1.0494, 1.0349, 1.0221, 1.0114,
+    1.0031, 0.9972, 0.9932, 0.991, 0.9902, 0.9905, 0.9914, 0.9927, 0.9942, 0.9957);
+  --m-spring-droplet: linear(0, 0.0232, 0.0821, 0.163, 0.2558, 0.3527, 0.4481, 0.5384, 0.6212,
+    0.6952, 0.7598, 0.8151, 0.8615, 0.8997, 0.9306, 0.955, 0.9739, 0.9882, 0.9986, 1.0058, 1.0106,
+    1.0135, 1.0148, 1.0152, 1.0147, 1.0138, 1.0125, 1.0111, 1.0096, 1.0082, 1.0068);
+  --m-t-travel: 412ms;
+  --m-t-settle: 644ms;
+  --m-t-press: 526ms;
+  --m-t-droplet: 535ms;
+
+  /* 按压用 press 弹簧，但把时长压到 240ms：完整 526ms 对"点一下"太慢，
+     压缩后刚度变高、过冲仍在（约 9%），按下去是"弹一下"而不是"挪一下" */
+  --m-t-press-tap: 240ms;
+  /** 小浮层（重复菜单）弹出用 */
+  --m-t-pop: 200ms;
+  /** 列表行 / 卡片进场（travel 弹簧要留出回弹时间） */
+  --m-t-enter: 260ms;
+  /** 弹出曲线的尾部过冲版：起步快、末段回一点点 */
+  --m-ease-pop-out: cubic-bezier(0.2, 0.9, 0.25, 1.06);
 
   /* 液态玻璃 */
   --m-glass-bg: linear-gradient(
@@ -47,12 +110,14 @@
   );
   --m-glass-edge: rgba(255, 255, 255, 0.95);
   --m-glass-line: rgba(120, 132, 158, 0.22);
+  /* 透镜比栏底稍亮、带一点蓝墨，静止时才读得出"选中块" */
   --m-glass-pill: linear-gradient(
     180deg,
-    rgba(255, 255, 255, 0.98) 0%,
-    rgba(244, 247, 255, 0.92) 100%
+    rgba(255, 255, 255, 0.99) 0%,
+    rgba(226, 235, 255, 0.96) 100%
   );
-  --m-glass-pill-shadow: 0 2px 8px rgba(15, 20, 35, 0.1), 0 1px 2px rgba(15, 20, 35, 0.06);
+  --m-glass-pill-shadow: 0 2px 10px rgba(15, 20, 35, 0.14), 0 1px 2px rgba(15, 20, 35, 0.08),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.6);
   --m-glass-shadow: 0 12px 32px rgba(15, 20, 35, 0.14), 0 3px 8px rgba(15, 20, 35, 0.06);
 }
 
@@ -71,6 +136,7 @@
     --m-on-accent: #ffffff;
     --m-event: #e0a34f;
     --m-danger: #ff6369;
+    --m-danger-soft: rgba(255, 99, 105, 0.14);
 
     /* 深色下玻璃要更透，不然会糊成一块灰 */
     --m-glass-bg: linear-gradient(
@@ -184,6 +250,19 @@ textarea {
   letter-spacing: -0.01em;
   line-height: 1.15;
   white-space: nowrap;
+  /* 换月/换页时只有这几个字变，给它一次很短的位移，标题不会硬切 */
+  animation: m-title-in var(--m-t-fast) var(--m-ease-out) both;
+}
+
+@keyframes m-title-in {
+  from {
+    opacity: 0.55;
+    transform: translate3d(0, 3px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 /* 右上角日历切换：胶囊按钮，点开是一张列表卡片 */
@@ -245,12 +324,24 @@ textarea {
   color: var(--m-accent);
 }
 
-/* 日历弹出：列表 + 右侧打勾 */
+/* 日历弹出：列表 + 右侧打勾。常驻 DOM，开合只改 opacity / transform */
 .m-menu-mask {
   position: fixed;
   inset: 0;
   z-index: 70;
   background: transparent;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity var(--m-t-fast) var(--m-ease),
+    visibility 0s linear var(--m-t-fast);
+}
+
+.m-menu-mask.is-open {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 0s;
 }
 
 .m-menu {
@@ -267,6 +358,22 @@ textarea {
   box-shadow: 0 18px 44px rgba(12, 16, 26, 0.18), 0 3px 10px rgba(12, 16, 26, 0.08);
   transform-origin: top right;
   overflow: hidden;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: scale(0.94) translate3d(0, -8px, 0);
+  transition:
+    opacity var(--m-t-fast) var(--m-ease),
+    transform var(--m-t-travel) var(--m-spring-travel),
+    visibility 0s linear var(--m-t-travel);
+}
+
+.m-menu.is-open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: none;
+  transition-delay: 0s;
 }
 
 .m-menu-item {
@@ -334,13 +441,39 @@ textarea {
 
 /* ------------------------------ 月历 ------------------------------ */
 
-.m-grid {
+/* 星期行固定在轨道上方：翻月时它不动，动的只有数字 */
+.m-dow-row {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
   gap: 2px;
   padding: 4px 10px 0;
-  /* 横向位移交给 JS 翻月，纵向仍然让页面滚动 */
+}
+
+/* 翻月视口：横向手势归自己，纵向留给页面滚动 */
+.m-pager {
+  overflow: hidden;
   touch-action: pan-y;
+}
+
+/* 三页并排，静止时停在中间那页；位移用 % 表示，不用量宽度 */
+.m-track {
+  display: flex;
+  transform: translate3d(-100%, 0, 0);
+  /* 松手吸附用 travel 弹簧：末段会轻轻收住，像被吸过去而不是匀速滑过去 */
+  transition: transform var(--m-t-travel) var(--m-spring-travel);
+  will-change: transform;
+}
+
+.m-pane {
+  flex: 0 0 100%;
+  min-width: 100%;
+}
+
+.m-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  padding: 0 10px;
 }
 
 .m-grid-dow {
@@ -374,7 +507,7 @@ textarea {
   transition:
     background var(--m-t-base) var(--m-ease),
     opacity var(--m-t-base) var(--m-ease),
-    transform var(--m-t-base) var(--m-ease),
+    transform var(--m-t-fast) var(--m-ease-out),
     box-shadow var(--m-t-base) var(--m-ease);
 }
 
@@ -382,6 +515,8 @@ textarea {
   box-shadow: inset 0 0 0 1.5px var(--m-accent);
   opacity: 0.55;
   transform: scale(1);
+  /* 今天那一圈也弹一下：150ms、scale .85→1、透明度 0→满（系统日历同一套） */
+  animation: m-sel-pop var(--m-t-fast) var(--m-ease-pop);
 }
 
 .m-grid-selected::before {
@@ -389,6 +524,16 @@ textarea {
   opacity: 1;
   transform: scale(1);
   box-shadow: none;
+  /* 选中那一下从 .85 弹到 1：150ms、尾巴略过冲，像系统日历里点日期的手感 */
+  animation: m-sel-pop var(--m-t-fast) var(--m-ease-pop);
+}
+
+/* 只写 from：结尾用元素自己的值，今天的 0.55 和选中的 1 各自落回各自的位置 */
+@keyframes m-sel-pop {
+  from {
+    transform: scale(0.85);
+    opacity: 0;
+  }
 }
 
 .m-grid-num {
@@ -398,9 +543,10 @@ textarea {
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   line-height: 1;
+  /* 数字的颜色要跟着底色一起翻，慢了会有一瞬间"白字叠白块" */
   transition:
-    color var(--m-t-base) var(--m-ease),
-    transform var(--m-t-fast) var(--m-ease-out);
+    color var(--m-t-fast) var(--m-ease),
+    transform var(--m-t-tap) var(--m-ease-out);
 }
 
 .m-grid-cell:active .m-grid-num {
@@ -497,17 +643,6 @@ textarea {
   margin-bottom: 16px;
 }
 
-.m-section-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 0 2px 8px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--m-text-3);
-}
-
 /* 一张卡装一天的内容，行与行之间只有发丝线 */
 .m-card {
   background: var(--m-surface);
@@ -562,19 +697,62 @@ textarea {
 .m-task-check.m-task-check-on {
   background: var(--m-accent);
   border-color: var(--m-accent);
+  /* 勾上的一下轻弹：150ms、尾巴略过冲（同系统日历选中日 / MIUI 笔记） */
+  animation: m-check-pop var(--m-t-fast) var(--m-ease-pop);
+}
+
+@keyframes m-check-pop {
+  from {
+    transform: scale(0.85);
+  }
 }
 
 .m-task-text {
+  position: relative;
   flex: 1;
   min-width: 0;
   font-size: 15px;
   line-height: 1.4;
   word-break: break-word;
+  /* 文字 300ms 渐灰 + 轻微下沉（MIUI 笔记：黄→灰的 ArgbEvaluator + 完成感） */
+  transition:
+    color 300ms var(--m-ease-out),
+    opacity 300ms var(--m-ease-out);
+}
+
+/* 删除线只画在文字上，不拉满整行：外层 flex:1 是布局用的，宽度会撑到行尾 */
+.m-task-label {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
+
+/*
+ * 删除线从左到右画出来：起点是主题黄、末端是禁用灰，
+ * 一条线同时交代"划掉"和"由亮转暗"，不是瞬间出现一条静态灰线。
+ */
+.m-task-label::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1.5px;
+  background: linear-gradient(90deg, #e0a34f 0%, var(--m-text-3) 100%);
+  transform: scaleX(0);
+  transform-origin: left center;
+  pointer-events: none;
+  transition: transform var(--m-t-page) var(--m-ease-out);
 }
 
 .m-task-text.m-task-done {
   color: var(--m-text-3);
-  text-decoration: line-through;
+  opacity: 0.72;
+  text-decoration: none;
+}
+
+.m-task-text.m-task-done .m-task-label::after {
+  transform: scaleX(1);
 }
 
 /* 重复规则 / 倒数日：安静的小字，不用药丸 */
@@ -595,7 +773,9 @@ textarea {
   display: grid;
   place-items: center;
   color: var(--m-text-3);
-  transition: background var(--m-t-fast) var(--m-ease-out), color var(--m-t-fast) var(--m-ease-out);
+  transition:
+    background var(--m-t-fast) var(--m-ease-out),
+    color var(--m-t-fast) var(--m-ease-out);
 }
 
 .m-task-del svg {
@@ -603,8 +783,16 @@ textarea {
   height: 16px;
 }
 
+/* 删除图标统一：平时灰叉，指上去/按下变红叉 + 淡红底（同侧栏视图删除） */
+@media (hover: hover) {
+  .m-task-del:hover {
+    background: var(--m-danger-soft);
+    color: var(--m-danger);
+  }
+}
+
 .m-task-del:active {
-  background: var(--m-surface-2);
+  background: var(--m-danger-soft);
   color: var(--m-danger);
 }
 
@@ -613,6 +801,264 @@ textarea {
   padding: 28px 16px;
   color: var(--m-text-3);
   font-size: 13px;
+}
+
+/* ------------------------------ 重复按钮 ------------------------------ */
+
+/* 弹层里：输入框 + 重复按钮一行，按钮在右边 */
+.m-sheet-add-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.m-sheet-add-row .m-sheet-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.m-sheet-add-row .repeat-chip {
+  height: 48px;
+  padding: 0 12px;
+  border-radius: var(--m-radius-sm);
+  border: 1px solid var(--m-stroke);
+  background: var(--m-surface-2);
+  color: var(--m-text-2);
+  font-size: 13px;
+}
+
+.m-sheet-add-row .repeat-chip.is-on {
+  border-color: transparent;
+  background: var(--m-accent-soft);
+  color: var(--m-accent);
+}
+
+/* 每行最左的胶囊（历史样式，保留） */
+.repeat-chip-box {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.repeat-chip {
+  height: 24px;
+  padding: 0 7px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--m-text-3);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    background var(--m-t-fast) var(--m-ease-out),
+    border-color var(--m-t-fast) var(--m-ease-out),
+    color var(--m-t-fast) var(--m-ease-out);
+}
+
+.repeat-chip.is-open {
+  background: var(--m-surface-2);
+  border-color: var(--m-stroke);
+  color: var(--m-text-2);
+}
+
+/* 有重复规则才上色；默认"不重复"保持安静 */
+.repeat-chip.is-on {
+  color: var(--m-accent);
+  border-color: transparent;
+  background: var(--m-accent-soft);
+}
+
+.repeat-menu {
+  position: absolute;
+  z-index: 40;
+  min-width: 176px;
+  padding: 6px;
+  border-radius: 16px;
+  background: var(--m-surface);
+  border: 1px solid var(--m-stroke);
+  box-shadow: 0 18px 44px rgba(12, 16, 26, 0.18);
+  /* 从按钮那一角弹出，尾巴过冲一点点 */
+  animation: m-repeat-pop var(--m-t-pop) var(--m-ease-pop-out) both;
+}
+
+@keyframes m-repeat-pop {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0) scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 每一项错开 24ms 浮上来 */
+.repeat-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 38px;
+  padding: 0 10px;
+  border-radius: 10px;
+  color: var(--m-text-2);
+  font-size: 13.5px;
+  text-align: left;
+  animation: m-repeat-item-in var(--m-t-fast) var(--m-ease-out) both;
+}
+
+@keyframes m-repeat-item-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 5px, 0);
+  }
+}
+
+/* 「每 N 天」这一行：左边是可点的名字，右边是数字输入框 */
+.repeat-item.is-custom {
+  padding: 0 8px 0 10px;
+}
+
+.repeat-custom-go {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  text-align: left;
+  color: inherit;
+  font-size: inherit;
+}
+
+.repeat-item:active {
+  background: var(--m-surface-2);
+}
+
+.repeat-days {
+  width: 48px;
+  height: 24px;
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 7px;
+  border: 1px solid var(--m-stroke-strong);
+  background: var(--m-surface-2);
+  color: var(--m-text);
+  font-size: 12.5px;
+  outline: none;
+}
+
+/* ------------------------------ 连接状态 ------------------------------ */
+
+/* 轮询失败时常驻在标题下面：颜色克制，只说明状态，不弹窗打断 */
+.m-offline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 14px 8px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: var(--m-danger-soft);
+  color: var(--m-danger);
+  font-size: 12.5px;
+  font-weight: 500;
+  text-align: left;
+  animation: m-row-in var(--m-t-base) var(--m-spring-travel) both;
+  transition: background var(--m-t-fast) var(--m-ease-out);
+}
+
+.m-offline:active {
+  background: var(--m-danger-soft);
+  transform: scale(0.99);
+}
+
+.m-offline-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: m-offline-pulse 1.6s var(--m-ease) infinite;
+}
+
+@keyframes m-offline-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* ------------------------------ 左滑删除 ------------------------------ */
+
+/*
+ * 底下藏一枚圆形红底 X（照小米笔记），行被手指推开才露出来。
+ * 不做整条红色矩形：那块面积太大、又和"选中"撞色。
+ */
+.swipe-row {
+  position: relative;
+  overflow: hidden;
+  /* 列表行进场：从 6px 下方向上落定，行与行按 24ms 错峰（外部用 animationDelay 给）。
+     用 travel 弹簧，尾巴收得干净，滚起来不会有"弹一下"的廉价感。 */
+  animation: m-row-in var(--m-t-enter) var(--m-spring-travel) both;
+}
+
+@keyframes m-row-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0);
+  }
+}
+
+.swipe-row + .swipe-row {
+  box-shadow: inset 0 1px 0 var(--m-stroke);
+}
+
+.swipe-del {
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  width: 34px;
+  height: 34px;
+  margin-top: -17px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--m-danger-soft);
+  color: var(--m-danger);
+  opacity: 0;
+  transform: scale(0.6);
+  transition:
+    opacity 160ms var(--m-ease-out),
+    transform 160ms var(--m-ease-out);
+}
+
+.swipe-row.is-open .swipe-del {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.swipe-del svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 2.2;
+}
+
+.swipe-content {
+  position: relative;
+  background: var(--m-surface);
+  touch-action: pan-y;
+  will-change: transform;
+}
+
+/* 滑出去之后整行淡掉，等外部把数据删掉 */
+.swipe-row.is-leaving .swipe-content {
+  opacity: 0;
+  transition: opacity var(--m-t-fast) var(--m-ease);
+}
+
+.swipe-row.is-leaving .swipe-del {
+  opacity: 0;
+  transition: opacity var(--m-t-fast) var(--m-ease);
 }
 
 /* 读数据失败的提示：不要静默留一个空日历 */
@@ -750,6 +1196,15 @@ textarea {
   z-index: 60;
   padding: 0 12px calc(var(--m-safe-bottom) + 12px);
   pointer-events: none;
+  transition:
+    transform var(--m-t-base) var(--m-ease),
+    opacity var(--m-t-base) var(--m-ease);
+}
+
+/* 弹层打开时整条沉下去，别压在键盘和输入框上 */
+.m-dock-wrap.is-hidden {
+  transform: translate3d(0, calc(100% + 32px), 0);
+  opacity: 0;
 }
 
 .m-dock {
@@ -783,7 +1238,7 @@ textarea {
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
-  transition: transform 160ms var(--m-ease-out);
+  transition: transform var(--m-t-fast) var(--m-ease-out);
 }
 
 /* 按住时整条玻璃轻轻下沉，跟药丸一起给出按压反馈 */
@@ -806,37 +1261,37 @@ textarea {
   );
 }
 
-/* 跟手滑动的液态药丸 */
-.m-dock-pill {
+/*
+ * 液态玻璃透镜（FlClash 的 lens，不是一格一格跳的药丸）：
+ * 位置、宽高、抬起量全部由 GlassDock.tsx 的 rAF 弹簧逐帧写进来，
+ * 所以这里不写 transition —— 缓动在物理里，不在 CSS 里。
+ */
+.m-dock-lens {
   position: absolute;
-  top: 5px;
-  bottom: 5px;
+  top: 50%;
   left: 0;
   z-index: 0;
-  border-radius: 19px;
+  width: 0;
+  height: 0;
+  border-radius: 22px;
   background: var(--m-glass-pill);
   box-shadow: var(--m-glass-pill-shadow);
   pointer-events: none;
-  transition:
-    transform 240ms var(--m-ease),
-    width 240ms var(--m-ease);
+  will-change: transform, width, height;
 }
 
-/* 手指按着的时候不要缓动：药丸要贴着手指走，松手才归位 */
-.m-dock-pill.is-dragging {
-  transition: none;
-}
-
-.m-dock-pill::after {
-  content: '';
+/* 透镜内的一道折射高光 */
+.m-dock-lens-glow {
   position: absolute;
   inset: 0;
   border-radius: inherit;
   background: linear-gradient(
     180deg,
-    rgba(255, 255, 255, 0.5) 0%,
-    rgba(255, 255, 255, 0) 58%
+    rgba(255, 255, 255, 0.55) 0%,
+    rgba(255, 255, 255, 0.08) 46%,
+    rgba(255, 255, 255, 0) 70%
   );
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
   pointer-events: none;
 }
 
@@ -851,7 +1306,8 @@ textarea {
   justify-content: center;
   gap: 2px;
   color: var(--m-text-3);
-  transition: color var(--m-t-base) var(--m-ease);
+  /* 上色是瞬时的（系统底栏也是换一张 state list，不做补间）：
+     颜色渐变的 200ms 里，药丸还在路上，看起来像两个东西各动各的 */
 }
 
 .m-dock-item.m-dock-item-on {
@@ -862,6 +1318,8 @@ textarea {
   display: grid;
   place-items: center;
   height: 22px;
+  /* 放大由 JS 按"离透镜中心的距离"逐帧写 transform，不给固定 scale */
+  will-change: transform;
 }
 
 .m-dock-icon svg {
@@ -894,6 +1352,11 @@ textarea {
   box-shadow:
     0 10px 24px rgba(12, 18, 32, 0.22),
     inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  transition: transform var(--m-t-tap) var(--m-ease-out);
+}
+
+.m-fab:active {
+  transform: scale(0.94);
 }
 
 .m-fab svg {
@@ -909,6 +1372,16 @@ textarea {
   inset: 0;
   background: rgba(8, 10, 16, 0.44);
   z-index: 50;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity var(--m-t-base) var(--m-ease),
+    visibility 0s linear var(--m-t-base);
+}
+
+.m-sheet-mask.is-open {
+  opacity: 1;
+  visibility: visible;
 }
 
 .m-sheet {
@@ -923,6 +1396,19 @@ textarea {
   max-width: 560px;
   margin: 0 auto;
   box-shadow: 0 -8px 32px rgba(8, 12, 20, 0.2);
+  transform: translate3d(0, 100%, 0);
+  visibility: hidden;
+  /* 弹层用 FlClash 的 travel 弹簧：起手快、末端轻轻收住，不像匀速滑块 */
+  transition:
+    transform var(--m-t-travel) var(--m-spring-travel),
+    visibility 0s linear var(--m-t-travel);
+  will-change: transform;
+}
+
+.m-sheet.is-open {
+  transform: none;
+  visibility: visible;
+  transition-delay: 0s;
 }
 
 .m-sheet-handle {
@@ -949,6 +1435,47 @@ textarea {
   outline: none;
   font-size: 16px;
   transition: border-color var(--m-t-fast) var(--m-ease-out);
+}
+
+/* 日程表单：一行一个字段，标签固定宽度，控件对齐 */
+.m-sheet-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.m-sheet-label {
+  flex: none;
+  width: 44px;
+  font-size: 13px;
+  color: var(--m-text-3);
+}
+
+.m-sheet-time,
+.m-sheet-select {
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  border-radius: var(--m-radius-sm);
+  border: 1px solid var(--m-stroke);
+  background: var(--m-surface-2);
+  padding: 0 12px;
+  font-size: 15px;
+  color: var(--m-text);
+  outline: none;
+  appearance: none;
+  transition: border-color var(--m-t-fast) var(--m-ease-out);
+}
+
+.m-sheet-time:focus,
+.m-sheet-select:focus {
+  border-color: var(--m-accent);
+}
+
+/* 弹层里的两档切换离标题近一点 */
+.m-sheet .m-auth-tabs {
+  margin: 2px 0 12px;
 }
 
 .m-sheet-input:focus {
@@ -993,7 +1520,6 @@ textarea {
   position: fixed;
   left: 50%;
   bottom: calc(var(--m-safe-bottom) + var(--m-dock-h) + 28px);
-  transform: translateX(-50%);
   z-index: 60;
   background: rgba(18, 21, 27, 0.92);
   color: #ffffff;
@@ -1002,6 +1528,17 @@ textarea {
   border-radius: 999px;
   white-space: nowrap;
   pointer-events: none;
+  opacity: 0;
+  transform: translate3d(-50%, 10px, 0) scale(0.96);
+  /* 小提示用 droplet：落下时有一下很轻的回弹，不抢注意力 */
+  transition:
+    opacity var(--m-t-fast) var(--m-ease),
+    transform var(--m-t-droplet) var(--m-spring-droplet);
+}
+
+.m-toast.is-open {
+  opacity: 1;
+  transform: translate3d(-50%, 0, 0) scale(1);
 }
 
 /* ------------------------------ 配对页 ------------------------------ */
@@ -1232,28 +1769,85 @@ textarea {
   opacity: 0.6;
 }
 
-/* ------------------------------ 启动占位 ------------------------------ */
+/* ------------------------------ 切页 ------------------------------ */
 
-/* 与 index.html 里的内联启动画面同形：蓝底圆角方块 + 白色标记 */
-.m-boot {
-  display: grid;
-  place-items: center;
+/*
+ * 只有切页（日历 / 即将 / 设置）才做一次进场：整块沿 X 进 28px + 淡入。
+ * 方向跟底栏的顺序一致（往右的标签从右边来），所以"往哪儿翻"是可读的。
+ * 距离和时长取自 FlClash 的 shared-axis（25% 位移、450ms；web 上收到 28px / 320ms），
+ * 曲线用 emphasized：起步快、收尾慢。
+ * 首次渲染不加动画 —— 首帧已经是真界面，再淡入一次等于把内容往后推。
+ */
+.m-view {
+  animation: m-view-in var(--m-t-page) var(--m-ease-out) both;
 }
 
-.m-boot-tile {
-  width: 76px;
-  height: 76px;
-  border-radius: 18px;
-  background: var(--m-accent);
-  color: #ffffff;
-  display: grid;
-  place-items: center;
-  box-shadow: 0 12px 32px rgba(17, 22, 30, 0.18);
+.m-view.is-next {
+  animation-name: m-view-in-next;
 }
 
-@media (prefers-color-scheme: dark) {
-  .m-boot-tile {
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+.m-view.is-prev {
+  animation-name: m-view-in-prev;
+}
+
+.m-view.no-anim {
+  animation: none;
+}
+
+/*
+ * 卡片进场：和列表行同一套（travel 弹簧 + 依次错开 28ms）。
+ * 卡片在 .m-body 里而不是 .m-view 的直接子层，所以用后代选择器。
+ */
+.m-view .m-card {
+  animation: m-row-in var(--m-t-enter) var(--m-spring-travel) both;
+}
+
+.m-view .m-card:nth-of-type(2) {
+  animation-delay: 28ms;
+}
+
+.m-view .m-card:nth-of-type(3) {
+  animation-delay: 56ms;
+}
+
+.m-view .m-card:nth-of-type(4) {
+  animation-delay: 84ms;
+}
+
+.m-view .m-card:nth-of-type(5) {
+  animation-delay: 112ms;
+}
+
+@keyframes m-view-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 8px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes m-view-in-next {
+  from {
+    opacity: 0;
+    transform: translate3d(28px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes m-view-in-prev {
+  from {
+    opacity: 0;
+    transform: translate3d(-28px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
   }
 }
 
@@ -1330,6 +1924,9 @@ textarea {
   place-items: center;
   border-radius: 8px;
   color: var(--m-text-3);
+  transition:
+    background var(--m-t-fast) var(--m-ease-out),
+    color var(--m-t-fast) var(--m-ease-out);
 }
 
 .m-icon-mini svg {
@@ -1341,8 +1938,15 @@ textarea {
   opacity: 0.3;
 }
 
+@media (hover: hover) {
+  .m-icon-mini:hover:not(:disabled) {
+    background: var(--m-danger-soft);
+    color: var(--m-danger);
+  }
+}
+
 .m-icon-mini:active {
-  background: var(--m-surface-2);
+  background: var(--m-danger-soft);
   color: var(--m-danger);
 }
 
@@ -1362,4 +1966,22 @@ textarea {
     animation-iteration-count: 1 !important;
     transition-duration: 1ms !important;
   }
+}
+
+/* ------------------------------ 按压反馈统一 ------------------------------ */
+
+/*
+ * 所有"按下去会缩一下"的控件走同一条 press 弹簧（FlClash 311 / .59）。
+ * 只覆盖 :active 期间的 transition：松开时回到各控件自己的快速过渡，
+ * 这样按下去有弹性、松手立刻跟手，不会拖泥带水。
+ */
+.m-fab:active,
+.m-task-check:active,
+.m-btn:active,
+.m-side-btn:active,
+.m-icon-mini:active,
+.m-today-btn:active,
+.m-group-item:active,
+.m-grid-cell:active .m-grid-num {
+  transition: transform var(--m-t-press-tap) var(--m-spring-press);
 }

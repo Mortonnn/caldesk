@@ -95,7 +95,7 @@ button {
   height: 22px;
   border-radius: 6px;
   color: var(--text-faint);
-  transition: background 0.14s ease, color 0.14s ease;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
 
 .mini-btn svg {
@@ -147,7 +147,7 @@ button {
   font-variant-numeric: tabular-nums;
   color: var(--text-dim);
   border-radius: 6px;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
 
 .mini-cell:hover {
@@ -236,7 +236,7 @@ button {
   gap: 8px;
   padding: 6px 6px;
   border-radius: 7px;
-  transition: background 0.12s ease;
+  transition: background var(--t-fast) var(--ease);
 }
 
 .mini-task-row:hover {
@@ -266,7 +266,7 @@ button {
   border-radius: 4px;
   border: 1px solid var(--stroke-strong);
   background: transparent;
-  transition: background 0.14s ease, border-color 0.14s ease;
+  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
 }
 
 .mini-check:hover {
@@ -328,7 +328,7 @@ button {
   font: inherit;
   font-size: 11px;
   cursor: pointer;
-  transition: background 0.14s ease, color 0.14s ease;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
 
 .mini-open:hover {
@@ -343,4 +343,46 @@ button {
 .mini-list::-webkit-scrollbar-thumb {
   background: var(--stroke-strong);
   border-radius: 999px;
+}
+
+/* ------------------------------ 按压反馈 ------------------------------ */
+
+/*
+ * 浮窗和主窗口用同一颗 press 弹簧（FlClash 311 / .593，压缩到 240ms）。
+ * 这里显式重写 transition，把背景过渡和 transform 过渡并在一起，
+ * 否则 shorthand 会把原有的 background 过渡覆盖掉。
+ */
+.mini-btn,
+.mini-cell,
+.mini-open {
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease),
+    transform var(--t-press) var(--spring-travel);
+}
+
+.mini-task-row {
+  transition:
+    background var(--t-fast) var(--ease),
+    transform var(--t-press) var(--spring-travel);
+}
+
+.mini-check {
+  transition:
+    background var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease),
+    transform var(--t-press) var(--spring-travel);
+}
+
+.mini-btn:active,
+.mini-check:active {
+  transform: scale(0.94);
+  transition: transform var(--t-press) var(--spring-press);
+}
+
+.mini-cell:active,
+.mini-task-row:active,
+.mini-open:active {
+  transform: scale(0.97);
+  transition: transform var(--t-press) var(--spring-press);
 }

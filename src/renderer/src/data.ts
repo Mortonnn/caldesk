@@ -85,6 +85,21 @@ function applyAuthResult(id: MobileIdentity, res: AuthResult): void {
 
 const HOST_KEY = 'caldesk.http'
 
+/**
+ * HTTP 头里只能放 latin1。
+ *
+ * 设备名是用户自己起的，默认是「型号_月日时」（纯 ASCII）没事，
+ * 可中文名会让 fetch 直接抛 "Failed to fetch" ——
+ * 而浏览器不会告诉你是哪个头坏了，只剩一句没头没尾的报错。
+ *
+ * 这里把非 latin1 的字符换掉：中文名丢掉重音、其余变问号。
+ * 服务端那边只拿它当显示名，少几个字不影响。
+ */
+function headerSafeName(name: string): string {
+  // eslint-disable-next-line no-control-regex
+  return name.replace(/[^\x20-\x7e]/g, '?').slice(0, 80)
+}
+
 /* ------------------------------ HTTP 适配器 ------------------------------ */
 
 export function createHttpHost(cfg: HttpConfig): HostApi {
@@ -120,7 +135,7 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
         ...init,
         headers: {
           authorization: `Bearer ${mobile.deviceId}.${mobile.deviceSecret}`,
-          'x-device-name': mobile.deviceName,
+          'x-device-name': headerSafeName(mobile.deviceName),
           'content-type': 'application/json',
           ...(init?.headers ?? {})
         }
@@ -143,6 +158,11 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
 
   /** 账号接口：注册 / 登录 / 认领 / 退出；错误体里的中文说明直接透出 */
   async function authCall<T>(path: string, body: unknown, token?: string): Promise<IpcResult<T>> {
+    // 地址为空时 fetch 会变成相对路径（打到 https://localhost），浏览器只报
+    // "Failed to fetch"，看不出是没填地址。先拦下来给一句人话。
+    if (!base()) {
+      return { ok: false, error: '还没填服务器地址' }
+    }
     try {
       const res = await fetch(base() + path, {
         method: 'POST',
@@ -168,7 +188,8 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
       }
       return { ok: true, data: (await res.json()) as T }
     } catch (err) {
-      return { ok: false, error: (err as Error).message }
+      // Failed to fetch 大多是地址写错 / 没网 / 证书不对，把地址带出来才查得动
+      return { ok: false, error: `连不上 ${base()}（${(err as Error).message}）` }
     }
   }
 
@@ -208,18 +229,34 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
 
     calendars: {
       list: () => req<CalendarMeta[]>('/api/calendars'),
-      create: async (name: string) => {
-        const created = await post<CalendarMeta>('/api/calendars/create', { name })
-        if (!created.ok) return created as unknown as IpcResult<never>
+      /**
+       * 新建视图。
+       *
+       * 颜色由调用方给（和桌面用同一支色板挑"第一支没用过的"），
+       * 服务端一次把新列表带回来，不再补 GET —— 手机上次操作慢一半就是多这一趟。
+       */
+      create: async (name: string, color?: string) => {
+        const res = await post<{
+          created?: CalendarMeta
+          calendars?: CalendarMeta[]
+        }>('/api/calendars/create', { name, color })
+        if (!res.ok) return res as unknown as IpcResult<never>
+        if (res.data.created && res.data.calendars) {
+          return { ok: true as const, data: { created: res.data.created, calendars: res.data.calendars } }
+        }
+        // 老服务端只回一条：补一次列表
         const list = await req<CalendarMeta[]>('/api/calendars')
-        return list.ok
-          ? { ok: true as const, data: { created: created.data, calendars: list.data } }
-          : (list as unknown as IpcResult<never>)
+        if (!list.ok) return list as unknown as IpcResult<never>
+        const created = (res.data.created ?? list.data.find((c) => c.name === name)) as CalendarMeta
+        return { ok: true as const, data: { created, calendars: list.data } }
       },
       update: () => Promise.resolve({ ok: false as const, error: '移动端暂不支持重命名视图' }),
       remove: async (id: string) => {
-        const res = await post<{ ok: boolean }>('/api/calendars/delete', { id })
+        const res = await post<{ ok?: boolean; calendars?: CalendarMeta[] }>('/api/calendars/delete', {
+          id
+        })
         if (!res.ok) return res as unknown as IpcResult<never>
+        if (res.data.calendars) return { ok: true as const, data: res.data.calendars }
         return req<CalendarMeta[]>('/api/calendars')
       }
     },
@@ -366,7 +403,8 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
       getState: async (): Promise<SyncStateResult> => {
         const id = loadMobileIdentity()
         return {
-          serverUrl: id?.serverUrl ?? base(),
+          // 空串要走回退：老身份里可能存了个空地址，登录页就没东西可填
+          serverUrl: id?.serverUrl || base(),
           deviceId: id?.deviceId ?? '',
           deviceName: id?.deviceName ?? '',
           accountId: id?.accountId ?? '',
@@ -377,6 +415,14 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
       setServer: async (url: string, deviceName: string): Promise<SyncStateResult> => {
         const before = loadMobileIdentity()
         const next = ensureMobileIdentity({ serverUrl: url.trim(), deviceName })
+        /*
+         * 关键：ensureMobileIdentity 只写 localStorage，而 base() 读的是创建 host 时
+         * 保存下来的这份 mobile 快照。不同步回去的话，刚填完服务器地址就登录，
+         * 请求仍然打到旧地址（或空地址 → 相对路径 → https://localhost），
+         * 浏览器只报 Failed to fetch —— 就是"退出登录后再也登不回来"的那个坑。
+         */
+        mobile.serverUrl = next.serverUrl
+        mobile.deviceName = next.deviceName
         const changed = Boolean(before && before.serverUrl !== next.serverUrl)
         // 换服务器等于换账号：旧账号在另一台服务器上，先退出登录
         if (changed && next.accountId) {
@@ -393,6 +439,7 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
             loggedOut: true
           }
         }
+        saveMobileIdentity(mobile)
         return {
           serverUrl: next.serverUrl,
           deviceId: next.deviceId,
@@ -454,7 +501,7 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
           const res = await fetch(base() + '/auth/me', {
             headers: {
               authorization: `Bearer ${mobile.deviceId}.${mobile.deviceSecret}`,
-              'x-device-name': mobile.deviceName
+              'x-device-name': headerSafeName(mobile.deviceName)
             }
           })
           if (!res.ok) return { ok: false as const, error: `HTTP ${res.status}` }
@@ -477,7 +524,13 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
       /** 变更探针：手机每隔几秒问一次服务端"有没有新东西" */
       changes: async () => {
         const res = await req<{ token?: number }>('/api/changes')
-        return { local: 0, remote: Number(res.ok ? (res.data.token ?? 0) : 0), changed: false }
+        // 把 ok 带出去：不然「连不上」和「没有变更」都是 remote 0，界面完全看不出区别
+        return {
+          local: 0,
+          remote: Number(res.ok ? (res.data.token ?? 0) : 0),
+          changed: false,
+          ok: res.ok
+        }
       },
       run: () =>
         Promise.resolve({ ok: true, pushed: 0, pulled: 0, failed: 0, errors: [], tables: {} }).then(

@@ -23,6 +23,31 @@ export interface CalendarMeta {
   deletedAt: number | null
 }
 
+/**
+ * 新建视图的配色。
+ *
+ * 桌面端和手机端必须用同一支色板、同一套"挑第一个没用过的"规则，
+ * 否则手机上建出来全是默认蓝、电脑上却五颜六色。
+ */
+export const CALENDAR_COLORS = [
+  '#5b8cff',
+  '#3ddc97',
+  '#ffb020',
+  '#ff6b6b',
+  '#a78bfa',
+  '#22d3ee',
+  '#f472b6',
+  '#94a3b8'
+]
+
+/** 已经用掉的颜色之外，取第一支；用满了就按已有数量轮转 */
+export function nextCalendarColor(used: Iterable<string>): string {
+  const taken = new Set(used)
+  const free = CALENDAR_COLORS.find((c) => !taken.has(c))
+  if (free) return free
+  return CALENDAR_COLORS[taken.size % CALENDAR_COLORS.length]
+}
+
 export interface DayCell {
   /** 稳定主键：`${calendarId}:${date}`，便于跨设备合并 */
   id: string

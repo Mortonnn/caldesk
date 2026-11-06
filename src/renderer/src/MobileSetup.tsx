@@ -5,11 +5,9 @@
  * 注册时密码走同一套策略（数字 + 大小写 + 符号），并提供"生成强密码"。
  */
 import { useEffect, useState } from 'react'
-import { motion } from 'framer-motion'
 import { CalMark } from './icons'
 import { data } from './data'
 import { generateStrongPassword } from './password'
-import { DUR, EASE_OUT } from './motion'
 import { DEFAULT_SERVER_URL, resolveServerUrl } from './mobileIdentity'
 
 type Mode = 'login' | 'register'
@@ -117,16 +115,15 @@ export function MobileSetup({ onDone }: { onDone: () => void }): React.JSX.Eleme
         onChange={(e) => setPassword(e.target.value)}
       />
       <button className="m-auth-link" type="button" onClick={generate}>
-        生成强密码（16 位，含大小写、数字、符号）
+        生成强密码
       </button>
 
       {mode === 'register' && (
         <>
-          <label className="m-setup-label">邀请码（可选）</label>
+          <label className="m-setup-label">邀请码</label>
           <input
             className="m-setup-input"
             value={invite}
-            placeholder="服务器没设置邀请码就留空"
             onChange={(e) => setInvite(e.target.value)}
           />
         </>
@@ -149,16 +146,6 @@ export function MobileSetup({ onDone }: { onDone: () => void }): React.JSX.Eleme
       <button className="m-setup-btn" disabled={busy} onClick={() => void submit()}>
         {busy ? '处理中…' : mode === 'login' ? '登录' : '注册并登录'}
       </button>
-
-      <motion.p
-        className="m-setup-hint"
-        key={mode}
-        initial={{ opacity: 0, y: 4 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: DUR.base, ease: EASE_OUT }}
-      >
-        {mode === 'login' ? '没有账号？点上面的「注册」' : '已经有账号？点上面的「登录」'}
-      </motion.p>
     </div>
   )
 }

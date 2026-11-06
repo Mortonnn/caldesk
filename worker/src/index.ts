@@ -1032,7 +1032,14 @@ async function handleRest(req: Request, url: URL, env: Env, auth: AuthedDevice):
       deletedAt: null
     }
     await saveRow(env, accountId, 'calendars', row)
-    return json({ id: row.id, name: row.name, color: row.color })
+    // 直接把新列表带回去：手机端一次往返就能画完，不用再 GET 一遍
+    const after = (await loadTable(env, accountId, 'calendars'))
+      .filter((r) => !r.deletedAt)
+      .sort((a, b) => Number(a.sort ?? 0) - Number(b.sort ?? 0))
+    return json({
+      created: { id: row.id, name: row.name, color: row.color },
+      calendars: after.map((r) => ({ id: r.id, name: r.name, color: r.color, sort: r.sort }))
+    })
   }
 
   if (path === '/api/calendars/delete' && req.method === 'POST') {
@@ -1044,7 +1051,13 @@ async function handleRest(req: Request, url: URL, env: Env, auth: AuthedDevice):
     const hit = rows.find((r) => r.id === id)
     if (!hit) return fail(404, 'not_found', '视图不存在')
     await saveRow(env, accountId, 'calendars', { ...hit, deletedAt: Date.now(), updatedAt: Date.now() })
-    return json({ ok: true })
+    const after = (await loadTable(env, accountId, 'calendars'))
+      .filter((r) => !r.deletedAt)
+      .sort((a, b) => Number(a.sort ?? 0) - Number(b.sort ?? 0))
+    return json({
+      ok: true,
+      calendars: after.map((r) => ({ id: r.id, name: r.name, color: r.color, sort: r.sort }))
+    })
   }
 
   if (path === '/api/search' && req.method === 'GET') {

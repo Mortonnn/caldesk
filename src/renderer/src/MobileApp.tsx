@@ -5,24 +5,43 @@
  *  - 顶部：月份 + 日历切换
  *  - 中部：月历网格 → 点某天看当天详情
  *  - 底部：视图切换 + 悬浮加号
+ *
+ * 启动：身份存在 localStorage 里，第一帧同步读出来就能画真界面，
+ * 所以没有启动画面，也没有 ready 之前的那一段空白。
+ *
+ * 动效：全部走 CSS（transform / opacity），参数在 mobile.css 顶部。
+ * 不用 JS 一帧一帧算，滑动和收尾交给 GPU，低端机才不抖。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
-import type { CalendarEvent, CalendarMeta, DayCell, EventOccurrence } from '@shared/types'
-import { isDoneLine, lineText, splitLines } from '@shared/types'
+import { flushSync } from 'react-dom'
+import type { CalendarEvent, CalendarMeta, DayCell, EventKind, EventOccurrence } from '@shared/types'
+import { isDoneLine, lineText, nextCalendarColor, splitLines } from '@shared/types'
 import { describeRrule, fromDayNumber, toDayNumber, weekdayOf } from '@shared/rrule'
-import { DEFAULT_SERVER_URL } from './mobileIdentity'
+import { DEFAULT_SERVER_URL, isMobilePaired, loadMobileIdentity } from './mobileIdentity'
+import {
+  cellsFromText,
+  clearCache,
+  loadCache as loadMobileCache,
+  saveCache as saveMobileCache,
+  textFromCells
+} from './mobileCache'
 import { data } from './data'
 import type { DeviceListResult } from './data'
 import { CalMark, Icon } from './icons'
-import { DUR, EASE_EMPHASIZED, EASE_OUT, fade, riseIn } from './motion'
 import { GlassDock } from './GlassDock'
 import { MobileSetup } from './MobileSetup'
+import { RepeatChip } from './RepeatChip'
+import { SwipeRow } from './SwipeRow'
 import './mobile.css'
 
 /* ------------------------------ 工具 ------------------------------ */
 
 const DOW = ['一', '二', '三', '四', '五', '六', '日']
+/** 周几的 iCal 写法，和桌面端重复规则保持同一套 */
+const BYDAY = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU']
+
+/** 第一帧就要用的身份：同步读一次，之后由 reloadIdentity 维护 */
+const bootIdentity = loadMobileIdentity()
 
 function todayISO(): string {
   const d = new Date()
@@ -65,6 +84,15 @@ function dayLabel(iso: string): string {
   return `${d.getMonth() + 1}月${d.getDate()}日 星期${DOW[(d.getDay() + 6) % 7]}`
 }
 
+/** 某个月的 42 格（6 行 × 7 列，周一起） */
+function monthCells(monthISO: string): string[] {
+  const d = new Date(`${monthISO}T00:00:00`)
+  const first = new Date(d.getFullYear(), d.getMonth(), 1)
+  const firstISO = `${first.getFullYear()}-${String(first.getMonth() + 1).padStart(2, '0')}-01`
+  const gridStart = toDayNumber(firstISO) - weekdayOf(toDayNumber(firstISO))
+  return Array.from({ length: 42 }, (_, i) => fromDayNumber(gridStart + i))
+}
+
 /** 事件的显示时间：全天只显示日期，有时分显示时分 */
 function eventTime(ev: CalendarEvent): string {
   if (ev.allDay) return '全天'
@@ -87,46 +115,76 @@ function seenAt(ts: number): string {
 /**
  * 列表右侧那个小标签。
  *
- * 任务和事件是同一件事，区别只有"只属于这一天"和"会重复"。
- * 默认不重复就不加标签（不然每行都是"当天"，纯噪音），
- * 只有真的会重复/是提醒/倒数日时才说明一句。
+ * 只标"会重复"：不重复的每行都一样，打标签纯噪音。
+ * 提醒 / 倒数日已经取消，旧数据也按普通待办显示。
  */
 function eventKindLabel(ev: CalendarEvent): string {
-  if (ev.kind === 'countdown') return '倒数日'
-  if (ev.rrule) return describeRrule(ev.rrule)
-  return ev.kind === 'reminder' ? '提醒' : ''
+  return ev.rrule ? describeRrule(ev.rrule) : ''
 }
 
 /* ------------------------------ 主体 ------------------------------ */
 
 type Tab = 'month' | 'upcoming' | 'settings'
 
+/** 一次翻月的落点：0 = 留在本月，±1 = 换一个月 */
+type Settle = -1 | 0 | 1
+
 export default function MobileApp(): React.JSX.Element {
-  const [ready, setReady] = useState(false)
-  const [paired, setPaired] = useState(false)
-  const [calendars, setCalendars] = useState<CalendarMeta[]>([])
-  const [calId, setCalId] = useState<string>('')
+  /* 上一次看到的快照：先用它把界面画出来，再后台刷新（手机端以前要干等一轮网络） */
+  const bootCache = useRef(loadMobileCache()).current
+  const [paired, setPaired] = useState(() => isMobilePaired(bootIdentity))
+  const [calendars, setCalendars] = useState<CalendarMeta[]>(bootCache.calendars)
+  const [calId, setCalId] = useState<string>(bootCache.calId)
   const [date, setDate] = useState(todayISO())
-  const [cells, setCells] = useState<Record<string, DayCell>>({})
-  const [events, setEvents] = useState<EventOccurrence[]>([])
+  const [cells, setCells] = useState<Record<string, DayCell>>(() =>
+    cellsFromText(bootCache.cellsByCal[bootCache.calId], bootCache.calId)
+  )
+  const [events, setEvents] = useState<EventOccurrence[]>(
+    bootCache.eventsByCal[bootCache.calId] ?? []
+  )
   const [tab, setTab] = useState<Tab>('month')
   const [toast, setToast] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
   const [draft, setDraft] = useState('')
-  const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL)
-  const [username, setUsername] = useState('')
-  const [serverDraft, setServerDraft] = useState('')
+  /** 新建待办时选的重复规则；默认不重复，加完回到不重复 */
+  const [newRepeat, setNewRepeat] = useState<string | null>(null)
+  /* 弹层两档：加一行待办，或者加一条正经日程（带时间/重复/类型） */
+  const [addMode, setAddMode] = useState<'task' | 'event'>('task')
+  const [evTitle, setEvTitle] = useState('')
+  const [evTime, setEvTime] = useState('')
+  const [evRepeat, setEvRepeat] = useState<'none' | 'daily' | 'weekly' | 'monthly' | 'yearly'>('none')
+  const [evKind, setEvKind] = useState<EventKind>('task')
+  const [evBusy, setEvBusy] = useState(false)
+  const [serverUrl, setServerUrl] = useState(bootIdentity?.serverUrl || DEFAULT_SERVER_URL)
+  const [username, setUsername] = useState(bootIdentity?.username ?? '')
+  const [serverDraft, setServerDraft] = useState(bootIdentity?.serverUrl || '')
   const [newCal, setNewCal] = useState('')
   const [calBusy, setCalBusy] = useState(false)
   const [confirmCal, setConfirmCal] = useState<string | null>(null)
   const [devices, setDevices] = useState<DeviceListResult['devices']>([])
+  /** 连不上服务器（轮询失败）。只用来提示，不阻断任何操作 */
+  const [offline, setOffline] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   /** 右上角日历切换菜单 */
   const [calMenu, setCalMenu] = useState(false)
-  /** 月视图左右滑动手势 */
-  const swipeRef = useRef<{ x: number; y: number; axis: 'x' | 'y' | null } | null>(null)
-  /** 翻月方向：新月份从手指来的那一侧进场（1 = 往后翻，-1 = 往前翻） */
-  const [dir, setDir] = useState(1)
+  /** 弹层里的输入框：弹层常驻 DOM，autoFocus 只在挂载时生效，所以开合自己管焦点 */
+  const draftRef = useRef<HTMLInputElement | null>(null)
+  /**
+   * 切页动画方向。
+   *
+   * 首帧不给动画：内容已经在屏幕上了，再淡入一次等于把界面往后推 200ms，
+   * 白屏时间白白变长。用户第一次切页才打开。
+   */
+  const [viewMotion, setViewMotion] = useState<'none' | 'next' | 'prev'>('none')
+
+  /* 月历翻页用的三个 DOM 引用：视口、轨道、当前页码宽度 */
+  const pagerRef = useRef<HTMLDivElement | null>(null)
+  const trackRef = useRef<HTMLDivElement | null>(null)
+  const dragRef = useRef<{ x: number; y: number; t: number; axis: 'x' | 'y' | null } | null>(null)
+  /** 松手后正在收尾：这段时间内不再接受新手势，免得两段动画打架 */
+  const settlingRef = useRef(false)
+  const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   /**
    * 上次看到的服务端水位。
    *
@@ -135,6 +193,9 @@ export default function MobileApp(): React.JSX.Element {
    * 永远检测不到变更 —— 这正是"电脑改完手机必须退出重进"的根本原因。
    */
   const tokenRef = useRef(0)
+
+  /** 轮询循环里要调"当下那一版"的刷新函数，不能闭包在首帧上 */
+  const refreshAllRef = useRef<() => Promise<boolean>>(async () => false)
 
   const say = useCallback((msg: string) => {
     setToast(msg)
@@ -155,68 +216,164 @@ export default function MobileApp(): React.JSX.Element {
     return st
   }, [])
 
-  /* 启动：读身份 + 拉日历 */
+  /* 打开弹层就把键盘叫起来：等这一帧渲染完再 focus，WebView 才不会丢 */
   useEffect(() => {
-    void (async () => {
-      const st = await reloadIdentity()
-      if (!st.paired) {
-        setReady(true)
-        return
+    if (!adding) return
+    const id = requestAnimationFrame(() => draftRef.current?.focus())
+    return () => cancelAnimationFrame(id)
+  }, [adding])
+
+  /**
+   * 已经拉进内存的日期窗口。
+   *
+   * 以前点日历上任意一天都会重新拉一次数据，可这段数据本来就在内存里：
+   * 一次点击白白多走三趟网络（两趟 range + 一趟被重启的轮询带的 /api/changes）。
+   * 现在按「整月」为单位开窗：同一段里换日只是换视图，不发请求。
+   *
+   * 为什么按整月而不是按天：月历一次显示三个月（上／本月／下月），
+   * 按天开窗的话窗口边界永远是斜的，点同月的另一天都会擦到边上去，等于没省。
+   */
+  const loadedRef = useRef<{ cal: string; from: string; to: string; at: number } | null>(null)
+  /** 正在路上的那段请求：手势连甩时会连着喊两次一样的事，没必要发两趟 */
+  const inflightRef = useRef<{ key: string; promise: Promise<boolean> } | null>(null)
+  /** 窗口最多攒这么久（≈15 个月），翻到很远的月份时不至于越攒越大 */
+  const MAX_SPAN_DAYS = 460
+  /**
+   * 刚拿回来多久以内的数据算"还热"。
+   *
+   * force 一般来自切回前台 / 轮询发现变更，这些是好事；
+   * 但手势收尾和焦点事件有时会在同一下里连着触发两次，那就纯属重复请求了。
+   */
+  const FRESH_MS = 1500
+
+  /**
+   * 拉数据。返回值 = 这次有没有真的去服务端拿（false 表示用手上的内存就够）。
+   * 轮询要靠这个决定能不能推进水位，不然"跳过一次"会被当成"已经是最新的"。
+   */
+  const loadRange = useCallback(async (cal: string, center: string, force = false): Promise<boolean> => {
+    if (!cal) return false
+    // 月历上看得见的是三个月，按整月开窗刚好盖住
+    const needFrom = `${addMonths(center, -1).slice(0, 7)}-01`
+    const needTo = addDays(`${addMonths(center, 2).slice(0, 7)}-01`, -1)
+    const cur = loadedRef.current
+    const sameCal = cur?.cal === cal
+    /*
+     * 要看的这几个月已经被窗口盖住了，直接用内存里的，不发请求。
+     * force 是「服务端可能有变」的场合（切回前台、轮询发现变更、手动重试），这种要真去拿；
+     * 但如果这段刚刚才拿回来（1.5 秒内），那就是同一下手势里的重复调用，跳过。
+     */
+    if (sameCal && needFrom >= cur!.from && needTo <= cur!.to) {
+      if (!force || Date.now() - cur!.at < FRESH_MS) return false
+    }
+    let from = needFrom
+    let to = needTo
+    if (!force && sameCal) {
+      // 往前后翻月：一次把并集拿回来，免得每翻一月补一次
+      if (cur!.from < from) from = cur!.from
+      if (cur!.to > to) to = cur!.to
+      if (toDayNumber(to) - toDayNumber(from) > MAX_SPAN_DAYS) {
+        from = needFrom
+        to = needTo
       }
+    }
+    /*
+     * force 只刷「眼前看得见的这几个月」：窗口攒到十几个月的时候，
+     * 整段重拉在手机上就是几百 KB，没必要 —— 很久以前的月份等真翻回去再拉。
+     */
+
+    // 同一段已经在路上就别再发一遍（翻月的收尾和点格子有时会撞在同一段上）
+    const key = `${cal}|${from}|${to}`
+    const inflight = inflightRef.current
+    if (inflight && inflight.key === key) return inflight.promise
+
+    const run = (async (): Promise<boolean> => {
+      let lastErr = ''
+      // 冷启动时第一条请求可能抢在网络上电前发出，失败重试一次再放弃
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const [c, e] = await Promise.all([
+          data.cells.range(cal, from, to),
+          data.events.range(cal, from, to)
+        ])
+        if (c.ok) {
+          const map: Record<string, DayCell> = {}
+          for (const cell of c.data) map[cell.date] = cell
+          setCells(map)
+          setLoadError(null)
+        } else {
+          lastErr = c.error
+        }
+        if (e.ok) setEvents(e.data)
+        if (c.ok || e.ok) {
+          // 记住这次真正拿回来的窗口，下次同一段就不必再问服务端
+          loadedRef.current = { cal, from, to, at: Date.now() }
+          return true
+        }
+        if (attempt === 0) await new Promise((r) => setTimeout(r, 800))
+      }
+      // 两次都失败：明确告诉用户，别留一个看起来"没有任务"的空壳
+      setLoadError(lastErr || '读不到数据')
+      return false
+    })()
+
+    inflightRef.current = { key, promise: run }
+    try {
+      return await run
+    } finally {
+      if (inflightRef.current?.key === key) inflightRef.current = null
+    }
+  }, [])
+
+  /**
+   * 缓存回写：状态一变就把当前快照存起来。
+   * 下次冷启动直接画这一份，不必等网络；网络回来再覆盖成最新的。
+   */
+  useEffect(() => {
+    if (!calId) return
+    const prev = loadMobileCache()
+    saveMobileCache({
+      calendars,
+      calId,
+      cellsByCal: { ...prev.cellsByCal, [calId]: textFromCells(cells) },
+      eventsByCal: { ...prev.eventsByCal, [calId]: events }
+    })
+  }, [calendars, calId, cells, events])
+
+  /* 换日历时先把该日历的缓存顶上去，网络回来再覆盖（不然会短暂显示上一个日历的内容） */
+  useEffect(() => {
+    if (!calId) return
+    const cached = loadMobileCache()
+    setCells(cellsFromText(cached.cellsByCal[calId], calId))
+    setEvents(cached.eventsByCal[calId] ?? [])
+  }, [calId])
+
+  /**
+   * 挂载：界面已经在屏幕上了，这里只补数据。
+   *
+   * 只拉日历列表：当月数据由下面的 effect 自己拉（缓存里有 calId 时是并行的）。
+   * 设备列表以前也跟着拉，但那玩意儿只有设置页看得见，
+   * 冷启动白付一趟请求 —— 现在改成打开设置页再拉。
+   */
+  useEffect(() => {
+    if (!paired) return
+    void (async () => {
       const list = await data.calendars.list()
       if (list.ok) {
         setCalendars(list.data)
-        setCalId(list.data[0]?.id ?? '')
+        setCalId((prev) => prev || list.data[0]?.id || '')
       }
-      // 先把界面放出来再拉设备列表：设备列表慢一点不该让整个应用白屏
-      setReady(true)
-      void data.sync.devices().then((devs) => {
-        if (devs.ok) setDevices(devs.data.devices)
-      })
     })()
-  }, [reloadIdentity])
-
-  /* 应用真正可用了再移除启动画面（移动端首帧由 index.html 内联绘制） */
-  useEffect(() => {
-    if (ready) window.__caldeskReady?.()
-  }, [ready])
-
-  /* 拉当月的数据 */
-  const loadRange = useCallback(async (cal: string, center: string) => {
-    if (!cal) return
-    const from = addDays(center, -40)
-    const to = addDays(center, 70)
-    let lastErr = ''
-    // 冷启动时第一条请求可能抢在网络上电前发出，失败重试一次再放弃
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const [c, e] = await Promise.all([
-        data.cells.range(cal, from, to),
-        data.events.range(cal, from, to)
-      ])
-      if (c.ok) {
-        const map: Record<string, DayCell> = {}
-        for (const cell of c.data) map[cell.date] = cell
-        setCells(map)
-        setLoadError(null)
-      } else {
-        lastErr = c.error
-      }
-      if (e.ok) setEvents(e.data)
-      if (c.ok || e.ok) return
-      if (attempt === 0) await new Promise((r) => setTimeout(r, 800))
-    }
-    // 两次都失败：明确告诉用户，别留一个看起来"没有任务"的空壳
-    setLoadError(lastErr || '读不到数据')
+    // 只在首次挂载跑一次；登录成功由 MobileSetup 的 onDone 负责刷新
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
-    if (ready && paired && calId) void loadRange(calId, date)
-  }, [ready, paired, calId, date, loadRange])
+    if (paired && calId) void loadRange(calId, date)
+  }, [paired, calId, date, loadRange])
 
-  /* 切回前台时刷新一次 */
+  /* 切回前台时刷新一次（force：这段时间别的设备可能改过，内存里的不作数） */
   useEffect(() => {
     const onFocus = (): void => {
-      if (paired && calId) void loadRange(calId, date)
+      if (paired && calId) void loadRange(calId, date, true)
     }
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
@@ -235,9 +392,19 @@ export default function MobileApp(): React.JSX.Element {
    *
    * 电脑改完任务，手机不用退出重进就能看到。
    * 水位没变就什么都不做，不浪费流量。
+   *
+   * 这个 effect 只在「登录状态」变的时候重建：以前依赖里有 date/calId/offline，
+   * 点一下日历上别的日子就会把循环拆掉重来，顺手多发一趟 /api/changes。
+   * 循环里要用的东西一律走 ref 取当下的值。
    */
+  const offlineRef = useRef(false)
   useEffect(() => {
-    if (!ready || !paired || !calId) return
+    refreshAllRef.current = refreshAll
+    offlineRef.current = offline
+  })
+
+  useEffect(() => {
+    if (!paired) return
     let stopped = false
     let timer: ReturnType<typeof setTimeout> | null = null
 
@@ -246,19 +413,27 @@ export default function MobileApp(): React.JSX.Element {
       try {
         const probe = await data.sync.changes()
         if (stopped) return
+        // 连不上服务器要能看见：以前失败和"没变更"都是 remote 0，界面毫无提示，
+        // 用户只会觉得"软件坏了"（实际多半是没挂代理，直连被断）
+        setOffline(probe.ok === false)
         if (probe.remote > 0) {
           if (tokenRef.current === 0) {
             // 第一次只记基准，不触发刷新（避免刚打开就多拉一次）
             tokenRef.current = probe.remote
           } else if (probe.remote > tokenRef.current) {
-            tokenRef.current = probe.remote
-            await loadRange(calId, date)
+            /*
+             * 别的设备可能新建了日历，所以整体重读，不只是当月日格。
+             * 水位要等真的拿到新数据才推进：如果这次被"刚拉过"挡掉，
+             * 水位照推就等于把这次变更永久咽掉了。
+             */
+            const refreshed = await refreshAllRef.current()
+            if (refreshed) tokenRef.current = probe.remote
           }
         }
       } catch {
-        /* 网络不通就等下一轮 */
+        if (!stopped) setOffline(true)
       }
-      if (!stopped) timer = setTimeout(() => void tick(), 5000)
+      if (!stopped) timer = setTimeout(() => void tick(), offlineRef.current ? 3000 : 5000)
     }
 
     void tick()
@@ -266,13 +441,14 @@ export default function MobileApp(): React.JSX.Element {
       stopped = true
       if (timer) clearTimeout(timer)
     }
-  }, [ready, paired, calId, date, loadRange])
+    // 只跟着登录状态走：calId/date 变了不该重开一轮（那会白发一趟 /api/changes）
+  }, [paired])
 
   /** 从后台切回来（Android WebView 走 visibilitychange，不一定会发 focus） */
   useEffect(() => {
     const onVisible = (): void => {
       if (document.visibilityState === 'visible' && paired && calId) {
-        void loadRange(calId, date)
+        void loadRange(calId, date, true)
       }
     }
     document.addEventListener('visibilitychange', onVisible)
@@ -296,24 +472,60 @@ export default function MobileApp(): React.JSX.Element {
    * 所以先按「事件（按 createdAt）→ 任务行（按行号）」拼出创建顺序，
    * 再用稳定排序把已完成的挪到后面 —— 稳定排序保证组内顺序不变。
    */
+  /**
+   * 当天要显示的东西：待办行 + 会重复的待办，合成一个列表。
+   *
+   * 排序（用户指定）：
+   *   1. 没完成的在上，完成了的在下；
+   *   2. 组内按创建顺序：先创建的在上面，后创建的在下面。
+   *
+   * 纯文本行没有时间戳，行号就是它的创建顺序；会重复的待办有 createdAt。
+   * 两类没有共同的时间轴，所以顺序取「先文本行（按行号）、后重复待办（按 createdAt）」——
+   * 这样在输入框里连续加的待办保持追加顺序，后加的重复待办也不会插到最上面。
+   */
   const dayItems = useMemo(() => {
+    const lns = lines.map((text, index) => ({ type: 'line' as const, text, index }))
+    /*
+     * 行的 React key 不能用数组下标：删掉一行以后后面所有下标都往前挪，
+     * React 会把"正在滑出、opacity 0"的那一行复用给别的行，整天的待办就看不见了。
+     * 用「去掉完成标记的文本 + 同名序号」做稳定身份：勾选完成时 key 不变，动画能接上；
+     * 删掉别行也不影响这一行的身份。
+     */
+    const seen = new Map<string, number>()
+    const mapped = lns
+      .map((l) => {
+        const base = lineText(l.text).trim()
+        const n = (seen.get(base) ?? 0) + 1
+        seen.set(base, n)
+        return {
+          type: 'line' as const,
+          text: l.text,
+          index: l.index,
+          done: isDoneLine(l.text),
+          rowKey: `l:${base}#${n}`
+        }
+      })
+      .filter((l) => l.text.trim().length > 0)
+
     const evs = [...dayEvents]
       .sort((a, b) => (a.event.createdAt ?? 0) - (b.event.createdAt ?? 0))
       .map((occ) => ({ type: 'event' as const, occ, done: occ.done }))
-    const lns = lines
-      .map((text, index) => ({ type: 'line' as const, text, index, done: isDoneLine(text) }))
-      .filter((l) => l.text.trim().length > 0)
-    return [...evs, ...lns].sort((a, b) => Number(a.done) - Number(b.done))
+
+    // 先文本行、后重复待办；再按完成与否稳定排序（稳定排序保住组内创建顺序）
+    return [...mapped, ...evs].sort((a, b) => Number(a.done) - Number(b.done))
   }, [dayEvents, lines])
 
-  /** 当前月份的网格（6 行 × 7 列，周一起） */
-  const monthGrid = useMemo(() => {
-    const d = new Date(`${date}T00:00:00`)
-    const first = new Date(d.getFullYear(), d.getMonth(), 1)
-    const firstISO = `${first.getFullYear()}-${String(first.getMonth() + 1).padStart(2, '0')}-01`
-    const gridStart = toDayNumber(firstISO) - weekdayOf(toDayNumber(firstISO))
-    return Array.from({ length: 42 }, (_, i) => fromDayNumber(gridStart + i))
-  }, [date])
+  /**
+   * 可左右翻的三页：上个月 / 本月 / 下个月。
+   *
+   * 三页同时在 DOM 里，手指拖动只是移动整条轨道，
+   * 翻完只换日期、不重建结构 —— 这就是 ViewPager 的手感来源。
+   */
+  const panes = useMemo(
+    () => [addMonths(date, -1), addMonths(date, 0), addMonths(date, 1)],
+    [date]
+  )
+  const paneGrids = useMemo(() => panes.map((p) => monthCells(p)), [panes])
 
   /** 每天有几条任务 / 几个事件 */
   const dayCounts = useMemo(() => {
@@ -349,119 +561,476 @@ export default function MobileApp(): React.JSX.Element {
 
   /* ------------------------------ 操作 ------------------------------ */
 
-  async function toggleTask(index: number): Promise<void> {
-    if (!calId) return
+  /**
+   * 正在播完成动画的行（抄 MIUI 笔记）：
+   * 点上以后先让行**留在原位**播 300ms 删除线 + 勾，播完才提交数据、才重排。
+   * 以前直接提交，行瞬间跳到底部、key 又随文案变导致 DOM 重建，动画根本没机会播。
+   */
+  const [pendingDone, setPendingDone] = useState<{ index: number; done: boolean } | null>(null)
+  const pendingTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (pendingTimer.current) clearTimeout(pendingTimer.current)
+    },
+    []
+  )
+
+  function toggleTask(index: number): void {
     const line = lines[index]
-    if (line === undefined) return
-    const res = await data.cells.setDone(calId, date, index, !isDoneLine(line))
-    if (res.ok) setCells({ ...cells, [date]: res.data })
+    if (line === undefined || !calId || pendingDone !== null) return
+    const done = !isDoneLine(line)
+    // 先亮状态（行不动），播完动画再写库
+    setPendingDone({ index, done })
+    if (pendingTimer.current) clearTimeout(pendingTimer.current)
+    pendingTimer.current = setTimeout(() => {
+      void data.cells.setDone(calId, date, index, done).then((res) => {
+        // pending 的清除必须和 setCells 在同一帧：
+        // 早一帧清就会露出"未完成"的旧态，安卓 HTTP 有延迟，会看成
+        // 画线→变白→再画线。失败也要清（回滚）。
+        setPendingDone(null)
+        if (res.ok) setCells((prev) => ({ ...prev, [date]: res.data }))
+      })
+    }, 300)
   }
 
-  async function removeTask(index: number): Promise<void> {
+  /**
+   * 加一条日程。
+   *
+   * 手机以前只能往当天塞一行文字，想加"周三下午三点的会"只能去电脑。
+   * 这里补上最常用的三个字段：标题、时间（不填就是全天）、重复，类型默认任务。
+   */
+  function addEvent(): void {
+    const title = evTitle.trim()
+    if (!title || !calId || evBusy) return
+    setEvBusy(true)
+    const start = evTime ? `${date}T${evTime}:00` : date
+    const rrule =
+      evRepeat === 'daily'
+        ? 'FREQ=DAILY'
+        : evRepeat === 'weekly'
+          ? `FREQ=WEEKLY;BYDAY=${BYDAY[weekdayOf(toDayNumber(date))]}`
+          : evRepeat === 'monthly'
+            ? 'FREQ=MONTHLY'
+            : evRepeat === 'yearly'
+              ? 'FREQ=YEARLY'
+              : null
+    void data.events
+      .create({ calendarId: calId, kind: evKind, title, start, allDay: !evTime, rrule })
+      .then((res) => {
+        setEvBusy(false)
+        if (!res.ok) {
+          say(res.error)
+          return
+        }
+        setEvTitle('')
+        setEvTime('')
+        setEvRepeat('none')
+        setEvKind('task')
+        setAdding(false)
+        say('已添加日程')
+        void loadRange(calId, date)
+      })
+  }
+
+  /**
+   * 改某一行待办的重复规则。
+   *
+   * 和电脑端同一套数据形态：不重复 = 日格里的一行文本；会重复 = events 表里
+   * 一条 kind=task 的记录（只有它带 rrule、才会在别的日期出现）。
+   */
+  async function setRowRepeat(
+    item:
+      | { type: 'line'; index: number; text: string }
+      | { type: 'event'; occ: EventOccurrence },
+    rule: string | null
+  ): Promise<void> {
     if (!calId) return
-    const res = await data.cells.deleteLine(calId, date, index)
-    if (res.ok) {
-      setCells({ ...cells, [date]: res.data })
-      say('已删除')
+    const day = date
+    /*
+     * 一律先改本地再发请求：
+     * 以前这里是 await 写库 → await 重拉，两趟往返，网络慢的时候点了没反应。
+     * 失败就整块回滚（cells / events 都留了快照）。
+     */
+    const snapCells = cells
+    const snapEvents = events
+
+    if (item.type === 'event') {
+      const ev = item.occ.event
+      if (rule) {
+        setEvents((prev) =>
+          prev.map((x) => (x.event.id === ev.id ? { ...x, event: { ...x.event, rrule: rule } } : x))
+        )
+        say(describeRrule(rule))
+        void data.events.update(ev.id, { rrule: rule }).then((res) => {
+          if (!res.ok) {
+            setEvents(snapEvents)
+            say(res.error)
+          }
+        })
+        return
+      }
+      // 改成不重复：本地把事件删掉、把标题接回当天文本
+      const cur = cells[day]
+      const nextText = cur?.text?.trim() ? `${cur.text.replace(/\s+$/, '')}\n${ev.title}` : ev.title
+      setEvents((prev) => prev.filter((x) => x.event.id !== ev.id))
+      setCells((prev) => ({
+        ...prev,
+        [day]: {
+          ...(cur ?? {
+            id: `${calId}:${day}`,
+            calendarId: calId,
+            date: day,
+            color: null,
+            updatedAt: 0,
+            deletedAt: null
+          }),
+          text: nextText,
+          updatedAt: Date.now()
+        } as DayCell
+      }))
+      say('不重复了')
+      void data.events.remove(ev.id).then(async (res) => {
+        if (!res.ok) {
+          setEvents(snapEvents)
+          setCells(snapCells)
+          say(res.error)
+          return
+        }
+        const back = await data.cells.appendLine(calId, day, ev.title)
+        if (!back.ok) {
+          setEvents(snapEvents)
+          setCells(snapCells)
+          say(back.error)
+        }
+      })
+      return
     }
+
+    if (!rule) return
+    const title = lineText(item.text)
+    if (!title) return
+    // 文本行 → 会重复的待办：本地先换形态
+    const tempId = `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+    const rest = splitLines(cells[day]?.text ?? '')
+    rest.splice(item.index, 1)
+    setCells((prev) => ({
+      ...prev,
+      [day]: { ...prev[day], text: rest.join('\n'), updatedAt: Date.now() } as DayCell
+    }))
+    setEvents((prev) => [
+      ...prev,
+      {
+        date: day,
+        done: false,
+        event: {
+          id: tempId,
+          calendarId: calId,
+          kind: 'task',
+          title,
+          notes: null,
+          allDay: true,
+          start: day,
+          end: null,
+          rrule: rule,
+          remindMinutes: null,
+          targetDate: null,
+          color: null,
+          completed: false,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          deletedAt: null
+        }
+      }
+    ])
+    say(describeRrule(rule))
+    void data.events
+      .create({ calendarId: calId, kind: 'task', title, start: day, allDay: true, rrule: rule })
+      .then(async (created) => {
+        if (!created.ok) {
+          setCells(snapCells)
+          setEvents(snapEvents)
+          say(created.error)
+          return
+        }
+        setEvents((prev) =>
+          prev.map((x) => (x.event.id === tempId ? { ...x, event: created.data } : x))
+        )
+        const gone = await data.cells.deleteLine(calId, day, item.index)
+        if (!gone.ok) {
+          // 事件建好了但原文本行没删掉：以服务器为准重拉一次，别留两份
+          setEvents(snapEvents)
+          setCells(snapCells)
+          say(gone.error)
+        }
+      })
   }
 
-  async function addTask(): Promise<void> {
+  /** 删任务行：立刻从界面拿掉，网络失败再放回来（手机上次"删除很慢"就是干等这一趟） */
+  function removeTask(index: number): void {
+    if (!calId) return
+    const cur = cells[date]
+    if (!cur) return
+    const snapshot = cells
+    const rest = splitLines(cur.text)
+    rest.splice(index, 1)
+    setCells({ ...cells, [date]: { ...cur, text: rest.join('\n') } })
+    // 同一帧给反馈，不等回包
+    say('已删除')
+    void data.cells.deleteLine(calId, date, index).then((res) => {
+      if (!res.ok) {
+        setCells(snapshot)
+        say(res.error)
+        return
+      }
+      setCells((prev) => ({ ...prev, [date]: res.data }))
+    })
+  }
+
+  /** 加一条待办：输入框和列表立刻响应，网络在后台跑，失败再回滚 */
+  function addTask(): void {
     const text = draft.trim()
     if (!text || !calId) return
-    const res = await data.cells.appendLine(calId, date, text)
-    if (res.ok) {
-      setCells({ ...cells, [date]: res.data })
+    // 输入框右边选了重复规则：建一条会重复的待办（events 表，带 rrule）
+    if (newRepeat) {
+      const rule = newRepeat
       setDraft('')
       setAdding(false)
+      setNewRepeat(null)
+      /*
+       * 先在本地造一条临时记录画上去，再后台提交。
+       * 以前是"等服务器返回 → 再整块重拉"，两趟往返，网络慢的时候能卡一秒多。
+       */
+      const tempId = `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+      const temp: EventOccurrence = {
+        date,
+        done: false,
+        event: {
+          id: tempId,
+          calendarId: calId,
+          kind: 'task',
+          title: text,
+          notes: null,
+          allDay: true,
+          start: date,
+          end: null,
+          rrule: rule,
+          remindMinutes: null,
+          targetDate: null,
+          color: null,
+          completed: false,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          deletedAt: null
+        }
+      }
+      setEvents((prev) => [...prev, temp])
       say('已添加')
-    } else {
-      say(res.error)
+      void data.events
+        .create({
+          calendarId: calId,
+          kind: 'task',
+          title: text,
+          start: date,
+          allDay: true,
+          rrule: rule
+        })
+        .then((res) => {
+          if (!res.ok) {
+            // 失败：把临时行撤掉，内容放回输入框
+            setEvents((prev) => prev.filter((x) => x.event.id !== tempId))
+            setDraft(text)
+            setAdding(true)
+            setNewRepeat(rule)
+            say(res.error)
+            return
+          }
+          // 成功：用服务器的真实记录替换临时那条（拿到真 id，后续勾选/删除才对得上）
+          setEvents((prev) =>
+            prev.map((x) => (x.event.id === tempId ? { ...x, event: res.data } : x))
+          )
+        })
+      return
     }
+    const cur = cells[date]
+    const snapshot = cells
+    const base: DayCell =
+      cur ?? {
+        id: `${calId}:${date}`,
+        calendarId: calId,
+        date,
+        text: '',
+        color: null,
+        updatedAt: Date.now(),
+        deletedAt: null
+      }
+    const nextText = base.text.trim() ? `${base.text.replace(/\s+$/, '')}\n${text}` : text
+    setCells({ ...cells, [date]: { ...base, text: nextText, updatedAt: Date.now() } })
+    setDraft('')
+    setAdding(false)
+    // 提示立刻给，不等网络回包
+    say('已添加')
+    void data.cells.appendLine(calId, date, text).then((res) => {
+      if (!res.ok) {
+        setCells(snapshot)
+        setDraft(text)
+        setAdding(true)
+        say(res.error)
+        return
+      }
+      setCells((prev) => ({ ...prev, [date]: res.data }))
+    })
   }
 
   async function toggleEvent(o: EventOccurrence): Promise<void> {
-    const res = await data.events.setDone(o.event.id, o.date, !o.done)
-    if (res.ok) {
-      setEvents(
-        events.map((x) =>
-          x.event.id === o.event.id && x.date === o.date ? { ...x, done: !x.done } : x
-        )
+    // 乐观更新：行留在原位靠 CSS 播 300ms，不等网络
+    setEvents(
+      events.map((x) =>
+        x.event.id === o.event.id && x.date === o.date ? { ...x, done: !x.done } : x
       )
-    }
+    )
+    await data.events.setDone(o.event.id, o.date, !o.done)
   }
 
-  async function removeEvent(o: EventOccurrence): Promise<void> {
-    const res = await data.events.remove(o.event.id)
-    if (res.ok) {
-      setEvents(events.filter((x) => !(x.event.id === o.event.id && x.date === o.date)))
+  function removeEvent(o: EventOccurrence): void {
+    const snapshot = events
+    setEvents(events.filter((x) => !(x.event.id === o.event.id && x.date === o.date)))
+    void data.events.remove(o.event.id).then((res) => {
+      if (!res.ok) {
+        setEvents(snapshot)
+        say('删除失败')
+        return
+      }
       say('已删除')
-    } else {
-      say('删除失败')
-    }
+    })
   }
 
-  async function refreshAll(): Promise<void> {
+  /**
+   * 整体刷新：日历列表 + 当月内容。
+   *
+   * 只拉日格是不够的：别的设备新建（或删掉）的日历只有重读 calendars 才看得见，
+   * 不重读就会出现"电脑上加了日历，手机里怎么都没有"。
+   */
+  async function refreshAll(): Promise<boolean> {
     const list = await data.calendars.list()
     if (list.ok) {
       setCalendars(list.data)
-      if (!calId && list.data[0]) setCalId(list.data[0].id)
+      const stillThere = list.data.some((c) => c.id === calId)
+      const next = stillThere ? calId : (list.data[0]?.id ?? '')
+      if (next !== calId) setCalId(next)
     }
-    if (calId) await loadRange(calId, date)
+    const target = calId
+    // force：这是"服务端变了"才走的路径，内存里的窗口已经不可信
+    if (target) return loadRange(target, date, true)
+    return false
   }
 
-  /* ------------------------------ 手势 ------------------------------ */
+  /* ------------------------------ 翻月手势 ------------------------------ */
 
   /**
-   * 月视图左右滑切换月份。
+   * 收尾：把轨道挪到目标页，动画结束后换日期并把轨道瞬时复位。
    *
-   * 只有"横向位移明显大于纵向、且超过阈值"才算翻月，
-   * 免得上下滚动列表时误触发；手指按下再抬起没怎么动就是普通点选日期。
+   * 三页的静止位置是 translateX(-100%)（中间那页）。往左收尾就是 -200%，
+   * 往右是 0%。落定那一帧同时做两件事：换日期（三页整体左移一页 + 复位到 -100%），
+   * 两者位移刚好抵消，所以看不到跳。
    */
-  function onGridTouchStart(e: React.TouchEvent): void {
-    const t = e.touches[0]
-    swipeRef.current = { x: t.clientX, y: t.clientY, axis: null }
-  }
+  const settle = useCallback((dir: Settle) => {
+    const track = trackRef.current
+    if (!track) return
+    const REST = 'translate3d(-100%,0,0)'
 
-  function onGridTouchMove(e: React.TouchEvent): void {
-    const s = swipeRef.current
-    if (!s) return
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      if (dir !== 0) setDate((prev) => shiftMonth(prev, dir))
+      track.style.transition = 'none'
+      track.style.transform = ''
+      return
+    }
+
+    settlingRef.current = true
+    const done = (): void => {
+      if (settleTimer.current) {
+        clearTimeout(settleTimer.current)
+        settleTimer.current = null
+      }
+      track.removeEventListener('transitionend', done)
+      if (dir !== 0) {
+        flushSync(() => setDate((prev) => shiftMonth(prev, dir)))
+        track.style.transition = 'none'
+        track.style.transform = REST
+        void track.offsetHeight // 读一次布局，让复位和换页落在同一帧
+        track.style.transition = ''
+        track.style.transitionDuration = ''
+        track.style.transform = ''
+      }
+      settlingRef.current = false
+    }
+
+    // 用回 CSS 里那条曲线（拖动时它被关掉了）；没翻页的回弹要更快，别拖着
+    track.style.transition = ''
+    track.style.transitionDuration = dir === 0 ? '180ms' : ''
+    track.style.transform =
+      dir > 0 ? 'translate3d(-200%,0,0)' : dir < 0 ? 'translate3d(0%,0,0)' : REST
+    track.addEventListener('transitionend', done, { once: true })
+    // 兜底：transitionend 被系统动画打断时也得复位。
+    // 翻页那条是 412ms 的 travel 弹簧，兜底要留在它之后，不然会抢在动画结束前换页。
+    settleTimer.current = setTimeout(done, dir === 0 ? 260 : 620)
+  }, [])
+
+  function onGridTouchStart(e: React.TouchEvent<HTMLDivElement>): void {
+    if (settlingRef.current) return
     const t = e.touches[0]
-    const dx = t.clientX - s.x
-    const dy = t.clientY - s.y
-    if (s.axis === null && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
-      s.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y'
+    dragRef.current = { x: t.clientX, y: t.clientY, t: performance.now(), axis: null }
+    const track = trackRef.current
+    if (track) {
+      track.style.transition = 'none'
+      track.style.transitionDuration = ''
     }
   }
 
-  function onGridTouchEnd(e: React.TouchEvent): void {
-    const s = swipeRef.current
-    swipeRef.current = null
-    if (!s) return
-    const t = e.changedTouches[0]
+  function onGridTouchMove(e: React.TouchEvent<HTMLDivElement>): void {
+    const s = dragRef.current
+    const track = trackRef.current
+    const pager = pagerRef.current
+    if (!s || !track || !pager) return
+    const t = e.touches[0]
     const dx = t.clientX - s.x
     const dy = t.clientY - s.y
-    // 不依赖 touchmove 里锁定的方向：合成手势的 move 可能被浏览器合并，
-    // 直接看起止点的总位移最稳。
-    if (s.axis === 'y') return
-    if (Math.abs(dy) > Math.abs(dx)) return
-    if (Math.abs(dx) > 56) {
-      setDir(dx < 0 ? 1 : -1)
-      setDate((prev) => shiftMonth(prev, dx < 0 ? 1 : -1))
+    if (s.axis === null) {
+      // 6px 就锁方向：横滑稍微一动就该跟手，别让手指先"憋"一段才动
+      if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return
+      s.axis = Math.abs(dx) >= Math.abs(dy) * 0.8 ? 'x' : 'y'
     }
+    if (s.axis !== 'x') return
+    const width = pager.clientWidth || 1
+    // 拖到头就不再跟手，只留一点点阻尼
+    const clamped =
+      dx > width ? width + (dx - width) * 0.12 : dx < -width ? -width + (dx + width) * 0.12 : dx
+    track.style.transform = `translate3d(calc(-100% + ${clamped}px),0,0)`
+  }
+
+  function onGridTouchEnd(e: React.TouchEvent<HTMLDivElement>): void {
+    const s = dragRef.current
+    dragRef.current = null
+    if (!s || s.axis !== 'x') return
+    const pager = pagerRef.current
+    const width = pager?.clientWidth || 1
+    const dx = e.changedTouches[0].clientX - s.x
+    const dt = Math.max(1, performance.now() - s.t)
+    const vx = dx / dt // px/ms
+    // 三条都算翻页：拖过 18% 屏宽、或者一次明显的短甩（快 + 够 6% 距离）。
+    // 之前要拖满 30% 才认，手指轻轻一拨完全没反应，就是"太不敏感"。
+    const farEnough = Math.abs(dx) > width * 0.18
+    const flicked = Math.abs(vx) > 0.35 && Math.abs(dx) > width * 0.06
+    const hit = farEnough || flicked
+    const dir: Settle = hit ? (dx < 0 ? 1 : -1) : 0
+    settle(dir)
+  }
+
+  function onGridTouchCancel(): void {
+    if (dragRef.current?.axis === 'x') settle(0)
+    dragRef.current = null
   }
 
   /* ------------------------------ 渲染 ------------------------------ */
-
-  if (!ready) {
-    return (
-      <div className="m-shell m-boot">
-        <span className="m-boot-tile">
-          <CalMark size={44} />
-        </span>
-      </div>
-    )
-  }
 
   if (!paired) {
     return (
@@ -492,15 +1061,9 @@ export default function MobileApp(): React.JSX.Element {
           <span className="m-brand">
             <CalMark size={19} />
           </span>
-          <motion.div
-            className="m-top-month"
-            key={title}
-            initial={{ opacity: 0, y: 4 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: DUR.base, ease: EASE_OUT }}
-          >
+          <div className="m-top-month" key={title}>
             {title}
-          </motion.div>
+          </div>
         </div>
         {calendars.length > 0 && tab !== 'settings' && (
           <button
@@ -508,204 +1071,224 @@ export default function MobileApp(): React.JSX.Element {
             onClick={() => setCalMenu((v) => !v)}
             aria-expanded={calMenu}
           >
-            <span
-              className="m-cal-dot"
-              style={{ background: cal?.color ?? 'var(--m-accent)' }}
-            />
+            <span className="m-cal-dot" style={{ background: cal?.color ?? 'var(--m-accent)' }} />
             <span className="m-cal-name">{cal?.name ?? '日历'}</span>
             <span className="m-cal-chev">{Icon.chevronDown}</span>
           </button>
         )}
       </header>
 
-      {/* 日历切换：列表式弹出，选中项右侧打勾 */}
-      <AnimatePresence>
-        {calMenu && (
-          <motion.div
-            key="cal-mask"
-            className="m-menu-mask"
-            variants={fade}
-            initial="initial"
-            animate="animate"
-            exit="exit"
-            transition={{ duration: DUR.base, ease: EASE_OUT }}
-            onClick={() => setCalMenu(false)}
-          />
-        )}
-        {calMenu && (
-          <motion.div
-            key="cal-menu"
-            className="m-menu"
-            initial={{ opacity: 0, scale: 0.96, y: -6 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.98, y: -4 }}
-            transition={{ duration: DUR.base, ease: EASE_EMPHASIZED }}
+      {/*
+        连不上服务器时的常驻提示。
+        以前轮询失败是完全静默的，用户只会觉得"软件坏了"；这里把状态摆出来，
+        点一下立刻重试，恢复后自动消失。
+      */}
+      {offline && (
+        <button className="m-offline" onClick={() => void refreshAll()}>
+          <span className="m-offline-dot" />
+          连不上服务器 · 点这里重试
+        </button>
+      )}
+
+      {/* 日历切换：列表式弹出，选中项右侧打勾。常驻 DOM，开合只改 class */}
+      <div
+        className={`m-menu-mask ${calMenu ? 'is-open' : ''}`}
+        onClick={() => setCalMenu(false)}
+        aria-hidden={!calMenu}
+      />
+      <div
+        className={`m-menu ${calMenu ? 'is-open' : ''}`}
+        role="menu"
+        aria-hidden={!calMenu}
+      >
+        {calendars.map((c) => (
+          <button
+            key={c.id}
+            className={`m-menu-item ${c.id === calId ? 'on' : ''}`}
+            role="menuitemradio"
+            aria-checked={c.id === calId}
+            onClick={() => {
+              setCalId(c.id)
+              setCalMenu(false)
+            }}
           >
-            {calendars.map((c) => (
-              <button
-                key={c.id}
-                className={`m-menu-item ${c.id === calId ? 'on' : ''}`}
-                onClick={() => {
-                  setCalId(c.id)
-                  setCalMenu(false)
-                }}
-              >
-                <span className="m-menu-dot" style={{ background: c.color }} />
-                <span className="m-menu-label">{c.name}</span>
-                {c.id === calId && <span className="m-menu-check">{Icon.check}</span>}
-              </button>
-            ))}
-          </motion.div>
-        )}
-      </AnimatePresence>
+            <span className="m-menu-dot" style={{ background: c.color }} />
+            <span className="m-menu-label">{c.name}</span>
+            {c.id === calId && <span className="m-menu-check">{Icon.check}</span>}
+          </button>
+        ))}
+      </div>
 
       {/* 内容：切页只做一次很短的淡入 + 上浮，不做整屏横移 */}
       <div className="m-body">
         {loadError && (
-          <button className="m-load-error" onClick={() => void loadRange(calId, date)}>
+          <button className="m-load-error" onClick={() => void loadRange(calId, date, true)}>
             {loadError} · 点这里重试
           </button>
         )}
 
-        <motion.div
+        <div
+          className={`m-view ${
+            viewMotion === 'none' ? 'no-anim' : viewMotion === 'next' ? 'is-next' : 'is-prev'
+          }`}
           key={tab}
-          initial={{ opacity: 0, y: 6 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: DUR.base, ease: EASE_OUT }}
         >
           {tab === 'month' && (
             <>
-              {/* 月历网格：左右滑切换月份，新月份从手指来的那一侧滑进来 */}
-              <motion.div
-                className="m-grid"
-                key={date.slice(0, 7)}
-                initial={{ opacity: 0, x: dir * 16 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ duration: 0.26, ease: EASE_EMPHASIZED }}
-                onTouchStart={onGridTouchStart}
-                onTouchMove={onGridTouchMove}
-                onTouchEnd={onGridTouchEnd}
-              >
+              {/*
+                月历：三页并排，手指带走的是整条轨道。
+                松手后轨道滑到目标页，落定再换日期并瞬时复位 —— 跟系统 ViewPager 一个套路。
+              */}
+              <div className="m-dow-row">
                 {DOW.map((w) => (
                   <div className="m-grid-dow" key={w}>
                     {w}
                   </div>
                 ))}
-                {monthGrid.map((d) => {
-                  const inMonth = d.slice(0, 7) === date.slice(0, 7)
-                  const c = dayCounts[d]
-                  return (
-                    <button
-                      key={d}
-                      className={[
-                        'm-grid-cell',
-                        inMonth ? '' : 'm-grid-out',
-                        d === today ? 'm-grid-today' : '',
-                        d === date ? 'm-grid-selected' : ''
-                      ]
-                        .filter(Boolean)
-                        .join(' ')}
-                      onClick={() => setDate(d)}
-                      aria-pressed={d === date}
-                    >
-                      <span className="m-grid-num">{Number(d.slice(8))}</span>
-                      <span className="m-grid-dots">
-                        {c?.tasks ? <i className="m-grid-dot m-grid-dot-task" /> : null}
-                        {c?.events ? <i className="m-grid-dot m-grid-dot-event" /> : null}
-                      </span>
-                    </button>
-                  )
-                })}
-              </motion.div>
+              </div>
+              <div
+                className="m-pager"
+                ref={pagerRef}
+                onTouchStart={onGridTouchStart}
+                onTouchMove={onGridTouchMove}
+                onTouchEnd={onGridTouchEnd}
+                onTouchCancel={onGridTouchCancel}
+              >
+                <div className="m-track" ref={trackRef}>
+                  {paneGrids.map((grid, paneIndex) => (
+                    <div className="m-pane" key={panes[paneIndex]} aria-hidden={paneIndex !== 1}>
+                      <div className="m-grid">
+                        {grid.map((d) => {
+                          const inMonth = d.slice(0, 7) === panes[paneIndex].slice(0, 7)
+                          const c = dayCounts[d]
+                          return (
+                            <button
+                              key={d}
+                              className={[
+                                'm-grid-cell',
+                                inMonth ? '' : 'm-grid-out',
+                                d === today ? 'm-grid-today' : '',
+                                d === date ? 'm-grid-selected' : ''
+                              ]
+                                .filter(Boolean)
+                                .join(' ')}
+                              onClick={() => setDate(d)}
+                              tabIndex={paneIndex === 1 ? 0 : -1}
+                              aria-pressed={d === date}
+                            >
+                              <span className="m-grid-num">{Number(d.slice(8))}</span>
+                              <span className="m-grid-dots">
+                                {c?.tasks ? <i className="m-grid-dot m-grid-dot-task" /> : null}
+                                {c?.events ? <i className="m-grid-dot m-grid-dot-event" /> : null}
+                              </span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
 
               {/* 当天详情：日期标题 + 合并后的任务/事件列表 */}
-              <motion.div
-                className="m-day"
-                key={date}
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: DUR.base, ease: EASE_OUT }}
-              >
+              <div className="m-day">
                 <div className="m-day-head">
                   <span className="m-day-title">{dayLabel(date)}</span>
                   {date !== today && (
-                    <motion.button
-                      className="m-today-btn"
-                      whileTap={{ scale: 0.94 }}
-                      onClick={() => setDate(today)}
-                    >
+                    <button className="m-today-btn" onClick={() => setDate(today)}>
                       今天
-                    </motion.button>
+                    </button>
                   )}
                 </div>
 
                 {/* 任务是"只属于这一天"，事件是"可以重复的任务"，本质是同一件事，
                     所以合成一张卡片，只用一个标签区分。 */}
                 <div className="m-section">
-                  <div className="m-section-head">
-                    <span>这一天</span>
-                  </div>
                   <div className="m-card">
                     {dayItems.length === 0 ? (
                       <div className="m-empty">这一天还没有安排</div>
                     ) : (
-                      dayItems.map((it) =>
+                      dayItems.map((it, rowIndex) =>
                         it.type === 'event' ? (
-                          <div className="m-task" key={`e-${it.occ.event.id}-${it.occ.date}`}>
-                            <button
-                              className={`m-task-check ${it.occ.done ? 'm-task-check-on' : ''}`}
-                              onClick={() => void toggleEvent(it.occ)}
-                              aria-label={it.occ.done ? '取消完成' : '完成'}
-                            >
-                              {it.occ.done && Icon.check}
-                            </button>
-                            <span className={`m-task-text ${it.occ.done ? 'm-task-done' : ''}`}>
-                              {it.occ.event.title}
-                            </span>
-                            {eventKindLabel(it.occ.event) && (
-                              <span className="m-task-tag">{eventKindLabel(it.occ.event)}</span>
-                            )}
-                            <button
-                              className="m-task-del"
-                              onClick={() => void removeEvent(it.occ)}
-                              aria-label="删除"
-                            >
-                              {Icon.trash}
-                            </button>
-                          </div>
+                          <SwipeRow
+                            key={`e-${it.occ.event.id}-${it.occ.date}`}
+                            onDelete={() => removeEvent(it.occ)}
+                            style={{ animationDelay: `${Math.min(rowIndex, 9) * 24}ms` }}
+                          >
+                            <div className="m-task">
+                              <button
+                                className={`m-task-check ${it.occ.done ? 'm-task-check-on' : ''}`}
+                                onClick={() => void toggleEvent(it.occ)}
+                                aria-label={it.occ.done ? '取消完成' : '完成'}
+                              >
+                                {it.occ.done && Icon.check}
+                              </button>
+                              <span className={`m-task-text ${it.occ.done ? 'm-task-done' : ''}`}>
+                                <span className="m-task-label">{it.occ.event.title}</span>
+                              </span>
+                              {eventKindLabel(it.occ.event) && (
+                                <span className="m-task-tag">{eventKindLabel(it.occ.event)}</span>
+                              )}
+                              <button
+                                className="m-task-del"
+                                onClick={() => removeEvent(it.occ)}
+                                aria-label="删除"
+                              >
+                                {Icon.x}
+                              </button>
+                            </div>
+                          </SwipeRow>
                         ) : (
-                          <div className="m-task" key={`l-${it.index}-${it.text}`}>
-                            <button
-                              className={`m-task-check ${it.done ? 'm-task-check-on' : ''}`}
-                              onClick={() => void toggleTask(it.index)}
-                              aria-label={it.done ? '取消完成' : '完成'}
-                            >
-                              {it.done && Icon.check}
-                            </button>
-                            <span className={`m-task-text ${it.done ? 'm-task-done' : ''}`}>
-                              {lineText(it.text)}
-                            </span>
-                            <button
-                              className="m-task-del"
-                              onClick={() => void removeTask(it.index)}
-                              aria-label="删除"
-                            >
-                              {Icon.trash}
-                            </button>
-                          </div>
+                          // key 用稳定身份：勾选/删除别的行都不会让这一行换壳
+                          <SwipeRow
+                            key={it.rowKey}
+                            onDelete={() => removeTask(it.index)}
+                            style={{ animationDelay: `${Math.min(rowIndex, 9) * 24}ms` }}
+                          >
+                            <div className="m-task">
+                              <button
+                                className={`m-task-check ${
+                                  (pendingDone?.index === it.index ? pendingDone.done : it.done)
+                                    ? 'm-task-check-on'
+                                    : ''
+                                }`}
+                                onClick={() => toggleTask(it.index)}
+                                aria-label={it.done ? '取消完成' : '完成'}
+                              >
+                                {(pendingDone?.index === it.index ? pendingDone.done : it.done) &&
+                                  Icon.check}
+                              </button>
+                              <span
+                                className={`m-task-text ${
+                                  (pendingDone?.index === it.index ? pendingDone.done : it.done)
+                                    ? 'm-task-done'
+                                    : ''
+                                }`}
+                              >
+                                <span className="m-task-label">{lineText(it.text)}</span>
+                              </span>
+                              <button
+                                className="m-task-del"
+                                onClick={() => removeTask(it.index)}
+                                aria-label="删除"
+                              >
+                                {Icon.x}
+                              </button>
+                            </div>
+                          </SwipeRow>
                         )
                       )
                     )}
                   </div>
                 </div>
-              </motion.div>
+              </div>
             </>
           )}
 
           {tab === 'upcoming' && (
             <div className="m-list">
               {upcoming.length === 0 ? (
-                <div className="m-empty">没有即将到来的事件</div>
+                <div className="m-empty">没有即将到来的待办</div>
               ) : (
                 upcoming.map(([d, list]) => (
                   <div className="m-group" key={d}>
@@ -756,6 +1339,8 @@ export default function MobileApp(): React.JSX.Element {
                       onClick={() => {
                         void (async () => {
                           await data.sync.logout()
+                          // 退出登录要把缓存清掉：换个账号登进来不能看到上一个人的日历
+                          clearCache()
                           setPaired(false)
                           setCalendars([])
                           setCells({})
@@ -824,17 +1409,23 @@ export default function MobileApp(): React.JSX.Element {
                           <button
                             className="m-side-btn danger"
                             onClick={() => {
-                              void (async () => {
-                                const res = await data.calendars.remove(c.id)
-                                setConfirmCal(null)
+                              // 乐观删除：先把这行拿走，失败再放回来
+                              const snapshot = calendars
+                              const rest = calendars.filter((x) => x.id !== c.id)
+                              setConfirmCal(null)
+                              setCalendars(rest)
+                              if (calId === c.id) setCalId(rest[0]?.id ?? '')
+                              void data.calendars.remove(c.id).then((res) => {
                                 if (!res.ok) {
+                                  setCalendars(snapshot)
+                                  if (calId === c.id) setCalId(c.id)
                                   say(res.error)
                                   return
                                 }
                                 setCalendars(res.data)
                                 if (calId === c.id) setCalId(res.data[0]?.id ?? '')
                                 say('已删除')
-                              })()
+                              })
                             }}
                           >
                             删除
@@ -847,7 +1438,7 @@ export default function MobileApp(): React.JSX.Element {
                           disabled={calendars.length <= 1}
                           onClick={() => setConfirmCal(c.id)}
                         >
-                          {Icon.trash}
+                          {Icon.x}
                         </button>
                       )}
                     </div>
@@ -861,23 +1452,41 @@ export default function MobileApp(): React.JSX.Element {
                     />
                     <button
                       className="m-side-btn"
-                      disabled={!newCal.trim() || calBusy}
+                      disabled={!newCal.trim()}
                       onClick={() => {
-                        void (async () => {
-                          const name = newCal.trim()
-                          if (!name) return
-                          setCalBusy(true)
-                          const res = await data.calendars.create(name)
+                        const name = newCal.trim()
+                        if (!name || calBusy) return
+                        // 颜色和桌面端同一套规则：挑第一支没用过的
+                        const color = nextCalendarColor(calendars.map((c) => c.color))
+                        const tmpId = `tmp:${Date.now()}`
+                        const now = Date.now()
+                        // 乐观插入：输入框立刻清空、列表立刻多一行，不等网络
+                        setCalendars((prev) => [
+                          ...prev,
+                          {
+                            id: tmpId,
+                            name,
+                            color,
+                            sort: prev.length,
+                            createdAt: now,
+                            updatedAt: now,
+                            deletedAt: null
+                          }
+                        ])
+                        setNewCal('')
+                        setCalBusy(true)
+                        void data.calendars.create(name, color).then((res) => {
                           setCalBusy(false)
                           if (!res.ok) {
+                            setCalendars((prev) => prev.filter((c) => c.id !== tmpId))
+                            setNewCal(name)
                             say(res.error)
                             return
                           }
                           setCalendars(res.data.calendars)
                           setCalId(res.data.created.id)
-                          setNewCal('')
                           say('已新建')
-                        })()
+                        })
                       }}
                     >
                       添加
@@ -929,88 +1538,63 @@ export default function MobileApp(): React.JSX.Element {
               </div>
             </div>
           )}
-        </motion.div>
+        </div>
       </div>
 
       {/* 液态玻璃底栏：弹层打开时整条收起，别顶到键盘上面去 */}
-      {!adding && (
-        <GlassDock
-          items={[
-            { key: 'month', label: '日历', icon: Icon.calendar },
-            { key: 'upcoming', label: '即将', icon: Icon.clock },
-            { key: 'settings', label: '设置', icon: Icon.settings }
-          ]}
-          active={tab}
-          onSelect={(k) => setTab(k as Tab)}
-          onAdd={() => setAdding(true)}
-        />
-      )}
+      <GlassDock
+        hidden={adding}
+        items={[
+          { key: 'month', label: '日历', icon: Icon.calendar },
+          { key: 'upcoming', label: '即将', icon: Icon.clock },
+          { key: 'settings', label: '设置', icon: Icon.settings }
+        ]}
+        active={tab}
+        onSelect={(k) => {
+          // 底栏从左到右就是页面的先后：往右的标签从右边进来，读起来才顺
+          const order: Tab[] = ['month', 'upcoming', 'settings']
+          const to = order.indexOf(k as Tab)
+          setViewMotion(to >= order.indexOf(tab) ? 'next' : 'prev')
+          setTab(k as Tab)
+        }}
+        onAdd={() => setAdding(true)}
+      />
 
-      {/* 添加任务弹层 */}
-      <AnimatePresence>
-        {adding && (
-          <motion.div
-            key="sheet-mask"
-            className="m-sheet-mask"
-            variants={fade}
-            initial="initial"
-            animate="animate"
-            exit="exit"
-            transition={{ duration: DUR.base, ease: EASE_OUT }}
-            onClick={() => setAdding(false)}
+      {/* 添加任务弹层：常驻 DOM，开合只改 class，省掉一层挂载/卸载 */}
+      <div
+        className={`m-sheet-mask ${adding ? 'is-open' : ''}`}
+        onClick={() => setAdding(false)}
+        aria-hidden={!adding}
+      />
+      <div className={`m-sheet ${adding ? 'is-open' : ''}`} aria-hidden={!adding}>
+        <div className="m-sheet-handle" />
+        <div className="m-sheet-title">添加到 {dayLabel(date).split(' ')[0]}</div>
+        <div className="m-sheet-add-row">
+          <input
+            ref={draftRef}
+            className="m-sheet-input"
+            placeholder="要做什么？"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') addTask()
+            }}
           />
-        )}
-        {adding && (
-          <motion.div
-            key="sheet"
-            className="m-sheet"
-            initial={{ y: '100%' }}
-            animate={{ y: 0 }}
-            exit={{ y: '100%' }}
-            transition={{ duration: DUR.page, ease: EASE_EMPHASIZED }}
-          >
-              <div className="m-sheet-handle" />
-              <div className="m-sheet-title">添加到 {dayLabel(date).split(' ')[0]}</div>
-              <input
-                className="m-sheet-input"
-                placeholder="要做什么？"
-                value={draft}
-                autoFocus
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void addTask()
-                }}
-              />
-              <div className="m-sheet-actions">
-                <button className="m-btn" onClick={() => setAdding(false)}>
-                  取消
-                </button>
-                <button
-                  className="m-btn m-btn-primary"
-                  disabled={!draft.trim()}
-                  onClick={() => void addTask()}
-                >
-                  添加
-                </button>
-              </div>
-            </motion.div>
-        )}
-      </AnimatePresence>
+          <RepeatChip rule={newRepeat} baseDate={date} onChange={(rule) => setNewRepeat(rule)} />
+        </div>
+        <div className="m-sheet-actions">
+          <button className="m-btn" onClick={() => setAdding(false)}>
+            取消
+          </button>
+          <button className="m-btn m-btn-primary" disabled={!draft.trim()} onClick={addTask}>
+            添加
+          </button>
+        </div>
+      </div>
 
-      <AnimatePresence>
-        {toast && (
-          <motion.div
-            className="m-toast"
-            variants={riseIn(6)}
-            initial="initial"
-            animate="animate"
-            exit="exit"
-            transition={{ duration: DUR.base, ease: EASE_OUT }}
-          >
-            {toast}
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <div className={`m-toast ${toast ? 'is-open' : ''}`} role="status">
+        {toast}
+      </div>
     </div>
   )
 }

@@ -705,13 +705,14 @@ handle('search:query', (query: string, calendarId?: string, limit?: number) =>
  */
 ipcMain.handle('sync:changes', async () => {
   const id = identityOf()
-  if (!isPaired(id)) return { local: localChangeToken(), remote: 0, changed: false }
+  // ok 用来区分"连不上"和"没有变更"：两者以前都是 remote 0，界面看不出区别
+  if (!isPaired(id)) return { local: localChangeToken(), remote: 0, changed: false, ok: true }
   try {
     const remote = await remoteChangeToken(id)
     const known = Number(getMeta('sync:remoteToken') ?? 0)
-    return { local: localChangeToken(), remote, changed: remote > known }
+    return { local: localChangeToken(), remote, changed: remote > known, ok: true }
   } catch {
-    return { local: localChangeToken(), remote: 0, changed: false }
+    return { local: localChangeToken(), remote: 0, changed: false, ok: false }
   }
 })
 
