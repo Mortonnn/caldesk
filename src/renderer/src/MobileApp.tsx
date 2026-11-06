@@ -1093,7 +1093,7 @@ export default function MobileApp(): React.JSX.Element {
   const title = tab === 'month' ? monthLabel(date) : tab === 'upcoming' ? '即将' : '设置'
 
   return (
-    <div className="m-shell">
+    <div className={`m-shell ${adding || confirmEvent ? 'is-blurred' : ''}`}>
       {/* 顶栏：标题 + 日历切换。翻月靠左右滑，不占按钮 */}
       <header className="m-top">
         <div className="m-top-title">

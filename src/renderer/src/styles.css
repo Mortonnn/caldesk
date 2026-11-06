@@ -1638,18 +1638,27 @@ select {
 /* ---------- 删除确认 ---------- */
 
 /*
- * 所有遮罩统一：不压暗，只把背后的内容高斯模糊。
+ * 遮罩统一：不压暗，背后的内容逐渐模糊。
  *
- * 压暗会让整屏亮度"咔"一下掉下去，看着像闪屏；模糊则是连续的焦距变化，
- * 而且底下的日历还看得出轮廓 —— 用户知道自己在哪一层。
+ * 用 filter 而不是 backdrop-filter —— 后者在 Chromium 里只改计算值、不逐帧渲染，
+ * 看起来是"弹窗一出现，背景啪一下糊死"。filter 是真正逐帧插值的，
+ * 而且模糊的是内容本身（侧栏 / 主区），弹层是它们的兄弟节点，不受影响。
  */
+.app .sidebar,
+.app .main {
+  transition: filter var(--t-page) var(--ease);
+}
+
+.app.is-blurred .sidebar,
+.app.is-blurred .main {
+  filter: blur(6px);
+}
+
 .confirm-backdrop,
 .panel-scrim,
 .detail-scrim,
 .scrim {
-  background: transparent;
-  -webkit-backdrop-filter: blur(var(--scrim-blur));
-  backdrop-filter: blur(var(--scrim-blur));
+  background: var(--scrim);
 }
 
 .confirm-backdrop {

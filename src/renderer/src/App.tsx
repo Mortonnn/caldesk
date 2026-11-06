@@ -1136,7 +1136,7 @@ export default function App(): React.JSX.Element {
   }
 
   return (
-    <div className="app">
+    <div className={`app ${confirmDelete || panel !== 'none' ? 'is-blurred' : ''}`}>
       <header className="titlebar">
         <div className="titlebar-drag">
           <button

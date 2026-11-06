@@ -53,7 +53,7 @@
    * 压暗是一次性的亮度跳变，看着像闪一下；模糊是"对焦拉开"，
    * 有连续的过渡感，而且不会把底下的内容吃掉（还能看出是日历）。
    */
-  --m-backdrop-blur: 18px;
+  --m-backdrop-blur: 9px;
   --m-t-backdrop: 260ms;
   /*
     药丸的两条边是两条独立的弹簧：左边 damping 0.7 / 响应 400ms，
@@ -1410,32 +1410,40 @@ textarea {
 /* ------------------------------ 底部弹层 ------------------------------ */
 
 /*
- * 遮罩：只做背景模糊，不压暗（压暗是亮度硬跳，看着像闪一下）。
+ * 遮罩：不压暗，背后的内容逐渐模糊。
  *
- * 模糊必须"逐渐"加上来 —— 只过渡 opacity 是没用的：
- * backdrop-filter 是作用在背后内容上的，元素自己再怎么半透明，
- * 那一层模糊早就已经是最强状态了，看起来就是"弹层一出现，背景啪一下糊掉"。
- * 所以这里过渡的是模糊半径本身：0 → 18px。
+ * 为什么不是 backdrop-filter —— 在安卓 WebView 上，backdrop-filter 的
+ * transition 只会改计算值，实际画面不跟着渲染，看起来就是"抽屉一出现，
+ * 背景啪一下糊死"。所以改成本体加 filter：filter 是逐个画面真正插值渲染的。
+ *
+ * 被模糊的是内容层（顶栏 / 正文 / 底栏），弹层本身是它们的兄弟节点，不受影响。
  */
+.m-top,
+.m-body,
+.m-dock-wrap {
+  transition: filter var(--m-t-backdrop) var(--m-ease);
+}
+
+.m-shell.is-blurred .m-top,
+.m-shell.is-blurred .m-body,
+.m-shell.is-blurred .m-dock-wrap {
+  filter: blur(var(--m-backdrop-blur));
+}
+
+/* 遮罩只负责接住点击，不再自己画模糊 */
 .m-sheet-mask {
   position: fixed;
   inset: 0;
   z-index: 50;
   background: transparent;
-  -webkit-backdrop-filter: blur(0);
-  backdrop-filter: blur(0);
   opacity: 0;
   visibility: hidden;
   transition:
-    backdrop-filter var(--m-t-backdrop) var(--m-ease),
-    -webkit-backdrop-filter var(--m-t-backdrop) var(--m-ease),
     opacity var(--m-t-backdrop) var(--m-ease),
     visibility 0s linear var(--m-t-backdrop);
 }
 
 .m-sheet-mask.is-open {
-  -webkit-backdrop-filter: blur(var(--m-backdrop-blur));
-  backdrop-filter: blur(var(--m-backdrop-blur));
   opacity: 1;
   visibility: visible;
 }
@@ -2028,21 +2036,14 @@ textarea {
   inset: 0;
   z-index: 70;
   background: transparent;
-  /* 模糊半径从 0 长到 18px：只过渡 opacity 的话背景会"啪"一下糊掉 */
-  -webkit-backdrop-filter: blur(0);
-  backdrop-filter: blur(0);
   opacity: 0;
   visibility: hidden;
   transition:
-    backdrop-filter var(--m-t-backdrop) var(--m-ease),
-    -webkit-backdrop-filter var(--m-t-backdrop) var(--m-ease),
     opacity var(--m-t-backdrop) var(--m-ease),
     visibility 0s linear var(--m-t-backdrop);
 }
 
 .m-confirm-mask.is-open {
-  -webkit-backdrop-filter: blur(var(--m-backdrop-blur));
-  backdrop-filter: blur(var(--m-backdrop-blur));
   opacity: 1;
   visibility: visible;
 }
