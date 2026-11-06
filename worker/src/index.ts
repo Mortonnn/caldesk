@@ -882,6 +882,23 @@ async function handleRest(req: Request, url: URL, env: Env, auth: AuthedDevice):
     return json({ text: next })
   }
 
+  /*
+   * 整格覆盖。
+   *
+   * 删掉一行以后要能撤销：把删之前的整段文本原样写回去，
+   * 比"再 append 一次"可靠 —— append 会把行挪到末尾，勾选状态也保不住。
+   */
+  if (path === '/api/cells/set' && req.method === 'POST') {
+    const body = await readJson(req)
+    if (!body) return fail(400, 'bad_json', '请求体不是合法 JSON')
+    const calendar = String(body.calendar ?? '')
+    const date = String(body.date ?? '')
+    const text = typeof body.text === 'string' ? body.text : ''
+    if (!calendar || !date) return fail(400, 'missing_fields', '缺少 calendar/date')
+    await writeCell(env, accountId, calendar, date, text)
+    return json({ text })
+  }
+
   if (path === '/api/events' && req.method === 'GET') {
     const calendar = url.searchParams.get('calendar') ?? ''
     const from = url.searchParams.get('from') ?? ''
@@ -928,6 +945,19 @@ async function handleRest(req: Request, url: URL, env: Env, auth: AuthedDevice):
     return json({ ok: true })
   }
 
+  /* 撤销删除：把墓碑清掉，整条事件连同重复规则一起回来 */
+  if (path === '/api/events/restore' && req.method === 'POST') {
+    const body = await readJson(req)
+    if (!body) return fail(400, 'bad_json', '请求体不是合法 JSON')
+    const id = String(body.id ?? '')
+    if (!id) return fail(400, 'missing_fields', '缺少 id')
+    const rows = await loadTable(env, accountId, 'events')
+    const hit = rows.find((r) => r.id === id)
+    if (!hit) return fail(404, 'not_found', '事件不存在')
+    await saveRow(env, accountId, 'events', { ...hit, deletedAt: null, updatedAt: Date.now() })
+    return json({ ok: true })
+  }
+
   if (path === '/api/events/toggle' && req.method === 'POST') {
     const body = await readJson(req)
     if (!body) return fail(400, 'bad_json', '请求体不是合法 JSON')
@@ -958,6 +988,22 @@ async function handleRest(req: Request, url: URL, env: Env, auth: AuthedDevice):
       updatedAt: Date.now(),
       deletedAt: null
     })
+    return json({ ok: true })
+  }
+
+  /* 撤销「仅删除这天」：给 skip 行打墓碑，listOccurrences 会把它当没跳过 */
+  if (path === '/api/events/unskip' && req.method === 'POST') {
+    const body = await readJson(req)
+    if (!body) return fail(400, 'bad_json', '请求体不是合法 JSON')
+    const eventId = String(body.id ?? '')
+    const date = String(body.date ?? '')
+    if (!eventId || !date) return fail(400, 'missing_fields', '缺少 id/date')
+    const id = `${eventId}:${date}`
+    const rows = await loadTable(env, accountId, 'event_skip')
+    const hit = rows.find((r) => r.id === id)
+    if (hit) {
+      await saveRow(env, accountId, 'event_skip', { ...hit, deletedAt: Date.now(), updatedAt: Date.now() })
+    }
     return json({ ok: true })
   }
 
@@ -1226,16 +1272,27 @@ async function listOccurrences(
   from: string,
   to: string
 ): Promise<Array<{ event: RestRow; date: string; done: boolean }>> {
-  const [events, dones] = await Promise.all([
+  /*
+   * 这里必须把 event_skip 也读出来。
+   *
+   * 以前只读 events + event_done，「仅删除重复的这一天」写进去的 skip 行
+   * 全服务端没人看 —— 手机上删掉当天那一条，刷新就回来了。
+   * 桌面端的 listOccurrences 一直有这段过滤，worker 漏了。
+   */
+  const [events, dones, skips] = await Promise.all([
     loadTable(env, accountId, 'events'),
-    loadTable(env, accountId, 'event_done')
+    loadTable(env, accountId, 'event_done'),
+    loadTable(env, accountId, 'event_skip')
   ])
   const doneSet = new Set(dones.filter((d) => !d.deletedAt).map((d) => String(d.id)))
+  const skipSet = new Set(skips.filter((s) => !s.deletedAt).map((s) => String(s.id)))
   const out: Array<{ event: RestRow; date: string; done: boolean }> = []
   for (const event of events) {
     if (event.deletedAt) continue
     if (calendarId && event.calendarId !== calendarId) continue
     for (const date of expandEvent(event, from, to)) {
+      // 这一天被单独跳过（仅删本次）就不列出来
+      if (skipSet.has(`${event.id}:${date}`)) continue
       out.push({
         event,
         date,

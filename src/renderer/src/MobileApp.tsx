@@ -1252,6 +1252,8 @@ export default function MobileApp(): React.JSX.Element {
                           <SwipeRow
                             key={`e-${it.occ.event.id}-${it.occ.date}`}
                             onDelete={() => requestRemoveEvent(it.occ)}
+                            /* 重复待办会先弹确认框：别让这一行提前塌掉 */
+                            hold={Boolean(it.occ.event.rrule)}
                             style={{ animationDelay: `${Math.min(rowIndex, 9) * 24}ms` }}
                           >
                             <div className="m-task">

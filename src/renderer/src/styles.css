@@ -1637,6 +1637,21 @@ select {
 
 /* ---------- 删除确认 ---------- */
 
+/*
+ * 所有遮罩统一：不压暗，只把背后的内容高斯模糊。
+ *
+ * 压暗会让整屏亮度"咔"一下掉下去，看着像闪屏；模糊则是连续的焦距变化，
+ * 而且底下的日历还看得出轮廓 —— 用户知道自己在哪一层。
+ */
+.confirm-backdrop,
+.panel-scrim,
+.detail-scrim,
+.scrim {
+  background: transparent;
+  -webkit-backdrop-filter: blur(var(--scrim-blur));
+  backdrop-filter: blur(var(--scrim-blur));
+}
+
 .confirm-backdrop {
   position: fixed;
   inset: 0;

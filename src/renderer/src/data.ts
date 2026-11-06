@@ -277,23 +277,14 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
         return { ok: true as const, data: toCell(calendarId, hit ?? { date, text: '' }) }
       },
       setText: async (calendarId: string, date: string, text: string) => {
-        // 没有整格替换端点：先删空再逐行追加成本高，这里用"覆盖"语义的追加替代
-        const cur = await req<Array<{ date: string; text: string }>>(
-          `/api/cells?calendar=${encodeURIComponent(calendarId)}&from=${date}&to=${date}`
-        )
-        const old = cur.ok ? (cur.data.find((r) => r.date === date)?.text ?? '') : ''
-        const oldLines = old ? old.split('\n').length : 0
-        for (let i = 0; i < oldLines; i += 1) {
-          await post('/api/cells/remove-line', { calendar: calendarId, date, index: 0 })
-        }
-        let last = ''
-        for (const line of text.split('\n')) {
-          if (!line.trim()) continue
-          const res = await post<{ text: string }>('/api/cells/append', { calendar: calendarId, date, text: line })
-          if (!res.ok) return res as unknown as IpcResult<never>
-          last = res.data.text
-        }
-        return { ok: true as const, data: toCell(calendarId, { date, text: last }) }
+        const res = await post<{ text: string }>('/api/cells/set', {
+          calendar: calendarId,
+          date,
+          text
+        })
+        return res.ok
+          ? { ok: true as const, data: toCell(calendarId, { date, text: res.data.text }) }
+          : (res as unknown as IpcResult<never>)
       },
       appendLine: async (calendarId: string, date: string, text: string) => {
         const res = await post<{ text: string }>('/api/cells/append', { calendar: calendarId, date, text })

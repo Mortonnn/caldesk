@@ -47,7 +47,13 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 18px 48px rgba(0, 0, 0, 0.5);
 
-  --scrim: rgba(4, 6, 10, 0.56);
+  /*
+    遮罩不压暗，只做背景高斯模糊。
+    压暗是一次性的亮度跳变（"闪一下"）；模糊是焦距拉开，过渡连续，
+    底下的内容还看得出轮廓，不会整块吃掉。
+  */
+  --scrim: transparent;
+  --scrim-blur: 12px;
 
   /* 动效：与 motion.ts 同源（时长阶梯 120 / 180 / 240，页面级 300 由 JS 给） */
   --ease: cubic-bezier(0.05, 0.7, 0.1, 1);
@@ -118,7 +124,7 @@
     --shadow-sm: 0 1px 2px rgba(17, 22, 30, 0.06);
     --shadow-md: 0 20px 48px rgba(17, 22, 30, 0.12);
 
-    --scrim: rgba(17, 22, 30, 0.28);
+    --scrim: transparent;
   }
 }
 

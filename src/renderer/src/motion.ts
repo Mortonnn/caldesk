@@ -66,3 +66,27 @@ export const fade: Variants = {
   animate: { opacity: 1, transition: { duration: DUR.base, ease: EASE_OUT } },
   exit: { opacity: 0, transition: { duration: DUR.fast, ease: EASE_IN } }
 }
+
+/** 遮罩的模糊最大半径（和 tokens.css 的 --scrim-blur 保持一致） */
+const SCRIM_BLUR = 12
+
+/**
+ * 遮罩：不压暗，只把背后的内容**逐渐**模糊掉。
+ *
+ * 注意过渡的是模糊半径本身，不是 opacity —— backdrop-filter 作用在背景上，
+ * 元素自己变透明不会让糊掉的背景变淡，只会"啪"一下就已经最强。
+ * framer-motion 能对 filter 字符串做数值插值，所以直接写 blur(0px) → blur(12px)。
+ */
+export const scrimFade: Variants = {
+  initial: { opacity: 0, backdropFilter: 'blur(0px)' },
+  animate: {
+    opacity: 1,
+    backdropFilter: `blur(${SCRIM_BLUR}px)`,
+    transition: { duration: DUR.page, ease: EASE_OUT }
+  },
+  exit: {
+    opacity: 0,
+    backdropFilter: 'blur(0px)',
+    transition: { duration: DUR.base, ease: EASE_IN }
+  }
+}

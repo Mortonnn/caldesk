@@ -17,7 +17,7 @@ import {
   WinRestore,
   X
 } from './icons'
-import { DROPLET, DUR, EASE_EMPHASIZED, EASE_IN, EASE_OUT, fade, panelIn } from './motion'
+import { DROPLET, DUR, EASE_EMPHASIZED, EASE_IN, EASE_OUT, fade, panelIn, scrimFade } from './motion'
 import { RepeatChip } from './RepeatChip'
 import {
   addMonths,
@@ -1430,11 +1430,10 @@ export default function App(): React.JSX.Element {
             <motion.div
               key="detail-scrim"
               className="detail-scrim"
-              variants={fade}
+              variants={scrimFade}
               initial="initial"
               animate="animate"
               exit="exit"
-              transition={{ duration: DUR.base, ease: EASE_OUT }}
               onClick={() => setSelected(null)}
             />
           )}
@@ -1579,11 +1578,10 @@ export default function App(): React.JSX.Element {
             <>
               <motion.div
                 className="panel-scrim"
-                variants={fade}
+                variants={scrimFade}
                 initial="initial"
                 animate="animate"
                 exit="exit"
-                transition={{ duration: DUR.base, ease: EASE_OUT }}
                 onClick={() => {
                   setPanel('none')
                   setEditing(null)
@@ -1995,11 +1993,10 @@ export default function App(): React.JSX.Element {
         {confirmDelete && (
           <motion.div
             className="confirm-backdrop"
-            variants={fade}
+            variants={scrimFade}
             initial="initial"
             animate="animate"
             exit="exit"
-            transition={{ duration: DUR.base, ease: EASE_OUT }}
             onClick={() => setConfirmDelete(null)}
           >
             <motion.div

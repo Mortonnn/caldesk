@@ -39,6 +39,23 @@
   --m-ease: cubic-bezier(0.2, 0, 0, 1);
   --m-ease-out: cubic-bezier(0.05, 0.7, 0.1, 1);
   /*
+   * 底部弹层上扬的曲线。
+   *
+   * 以前用 travel 弹簧（会冲过 4% 再收回来），弹层从屏幕底边顶上来时
+   * 那一下"弹"特别明显 —— 从屏幕外冲进来的东西不该有回弹，
+   * 回弹只适合原地变化的东西（药丸、图标）。这里换成只减速、不过冲的曲线。
+   */
+  --m-ease-sheet: cubic-bezier(0.22, 1, 0.36, 1);
+  --m-t-sheet: 340ms;
+  /*
+   * 遮罩不做压暗，只做背景高斯模糊。
+   *
+   * 压暗是一次性的亮度跳变，看着像闪一下；模糊是"对焦拉开"，
+   * 有连续的过渡感，而且不会把底下的内容吃掉（还能看出是日历）。
+   */
+  --m-backdrop-blur: 18px;
+  --m-t-backdrop: 260ms;
+  /*
     药丸的两条边是两条独立的弹簧：左边 damping 0.7 / 响应 400ms，
     右边 damping 0.75 / 响应 500ms（从系统日历底栏量的）。
     弹簧用 linear() 采样成曲线 —— CSS 没有 spring 缓动，采样是最接近的做法：
@@ -138,21 +155,19 @@
     --m-danger: #ff6369;
     --m-danger-soft: rgba(255, 99, 105, 0.14);
 
-    /* 深色下玻璃要更透，不然会糊成一块灰 */
-    --m-glass-bg: linear-gradient(
-      180deg,
-      rgba(70, 80, 102, 0.5) 0%,
-      rgba(30, 35, 46, 0.46) 100%
-    );
-    --m-glass-edge: rgba(255, 255, 255, 0.18);
-    --m-glass-line: rgba(255, 255, 255, 0.12);
-    --m-glass-pill: linear-gradient(
-      180deg,
-      rgba(255, 255, 255, 0.18) 0%,
-      rgba(255, 255, 255, 0.08) 100%
-    );
-    --m-glass-pill-shadow: 0 2px 8px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2);
-    --m-glass-shadow: 0 14px 34px rgba(0, 0, 0, 0.5), 0 3px 8px rgba(0, 0, 0, 0.3);
+    /*
+     * 深色底栏就是一条黑条，不要玻璃。
+     *
+     * 之前深色下还是半透明灰 + 白色高光描边，在纯黑背景上等于自己发光，
+     * 亮得比内容还抢眼。这里改成实心深色：跟系统底栏一个观感。
+     */
+    --m-glass-bg: #0d0f13;
+    --m-glass-edge: transparent;
+    --m-glass-line: rgba(255, 255, 255, 0.07);
+    /* 选中的那一块只是比底色亮一档，不做白色透镜 */
+    --m-glass-pill: #24272e;
+    --m-glass-pill-shadow: none;
+    --m-glass-shadow: 0 10px 26px rgba(0, 0, 0, 0.5);
   }
 }
 
@@ -1365,21 +1380,62 @@ textarea {
   stroke-width: 2;
 }
 
+/*
+ * 深色下把玻璃的所有"发光件"关掉。
+ *
+ * 两条白色高光（顶部那道和透镜里的那道）+ 背景模糊都是为了浅色玻璃质感；
+ * 放到深色底上就成了自己发光，整条栏比内容还亮。深色就是一条黑条。
+ */
+@media (prefers-color-scheme: dark) {
+  .m-dock-glass {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    box-shadow: var(--m-glass-shadow);
+  }
+
+  .m-dock-glass::before {
+    display: none;
+  }
+
+  .m-dock-lens-glow {
+    display: none;
+  }
+
+  /* 药丸只靠底色区分，不加投影 */
+  .m-dock-lens {
+    box-shadow: none;
+  }
+}
+
 /* ------------------------------ 底部弹层 ------------------------------ */
 
+/*
+ * 遮罩：只做背景模糊，不压暗（压暗是亮度硬跳，看着像闪一下）。
+ *
+ * 模糊必须"逐渐"加上来 —— 只过渡 opacity 是没用的：
+ * backdrop-filter 是作用在背后内容上的，元素自己再怎么半透明，
+ * 那一层模糊早就已经是最强状态了，看起来就是"弹层一出现，背景啪一下糊掉"。
+ * 所以这里过渡的是模糊半径本身：0 → 18px。
+ */
 .m-sheet-mask {
   position: fixed;
   inset: 0;
-  background: rgba(8, 10, 16, 0.44);
   z-index: 50;
+  background: transparent;
+  -webkit-backdrop-filter: blur(0);
+  backdrop-filter: blur(0);
   opacity: 0;
   visibility: hidden;
   transition:
-    opacity var(--m-t-base) var(--m-ease),
-    visibility 0s linear var(--m-t-base);
+    backdrop-filter var(--m-t-backdrop) var(--m-ease),
+    -webkit-backdrop-filter var(--m-t-backdrop) var(--m-ease),
+    opacity var(--m-t-backdrop) var(--m-ease),
+    visibility 0s linear var(--m-t-backdrop);
 }
 
 .m-sheet-mask.is-open {
+  -webkit-backdrop-filter: blur(var(--m-backdrop-blur));
+  backdrop-filter: blur(var(--m-backdrop-blur));
   opacity: 1;
   visibility: visible;
 }
@@ -1398,10 +1454,10 @@ textarea {
   box-shadow: 0 -8px 32px rgba(8, 12, 20, 0.2);
   transform: translate3d(0, 100%, 0);
   visibility: hidden;
-  /* 弹层用 FlClash 的 travel 弹簧：起手快、末端轻轻收住，不像匀速滑块 */
+  /* 从屏幕外进来的东西不该回弹：只用减速曲线（见 --m-ease-sheet 注释） */
   transition:
-    transform var(--m-t-travel) var(--m-spring-travel),
-    visibility 0s linear var(--m-t-travel);
+    transform var(--m-t-sheet) var(--m-ease-sheet),
+    visibility 0s linear var(--m-t-sheet);
   will-change: transform;
 }
 
@@ -1969,18 +2025,24 @@ textarea {
  */
 .m-confirm-mask {
   position: fixed;
-  /* 整屏压暗：弹层是浮起来的，底下留一条亮着的 dock 很扎眼 */
   inset: 0;
-  background: rgba(8, 10, 16, 0.5);
   z-index: 70;
+  background: transparent;
+  /* 模糊半径从 0 长到 18px：只过渡 opacity 的话背景会"啪"一下糊掉 */
+  -webkit-backdrop-filter: blur(0);
+  backdrop-filter: blur(0);
   opacity: 0;
   visibility: hidden;
   transition:
-    opacity var(--m-t-base) var(--m-ease),
-    visibility 0s linear var(--m-t-base);
+    backdrop-filter var(--m-t-backdrop) var(--m-ease),
+    -webkit-backdrop-filter var(--m-t-backdrop) var(--m-ease),
+    opacity var(--m-t-backdrop) var(--m-ease),
+    visibility 0s linear var(--m-t-backdrop);
 }
 
 .m-confirm-mask.is-open {
+  -webkit-backdrop-filter: blur(var(--m-backdrop-blur));
+  backdrop-filter: blur(var(--m-backdrop-blur));
   opacity: 1;
   visibility: visible;
 }
@@ -1989,21 +2051,26 @@ textarea {
   position: fixed;
   left: 0;
   right: 0;
-  /* 离底部留一段：三个按钮整块往上提，别贴着屏幕边 */
-  bottom: calc(var(--m-safe-bottom) + 44px);
+  /*
+   * 贴着屏幕底边，不留缝。
+   *
+   * 之前为了"浮起来"把整块提了 44px，结果弹层下面是敞开的 ——
+   * 底栏从缝里露出来一截，看着像没盖严。现在就是标准底部抽屉：
+   * 一直延伸到底，底部内边距自己避安全区。
+   */
+  bottom: 0;
   z-index: 71;
   background: var(--m-surface);
-  /* 浮起来的，四角都要圆 — 只圆上半截会像"从底边挤出来"的半截卡片 */
-  border-radius: 20px;
-  padding: 8px 16px 16px;
+  border-radius: 20px 20px 0 0;
+  padding: 8px 16px calc(var(--m-safe-bottom) + 16px);
   max-width: 560px;
   margin: 0 auto;
   box-shadow: 0 -8px 32px rgba(8, 12, 20, 0.2);
   transform: translate3d(0, 100%, 0);
   visibility: hidden;
   transition:
-    transform var(--m-t-travel) var(--m-spring-travel),
-    visibility 0s linear var(--m-t-travel);
+    transform var(--m-t-sheet) var(--m-ease-sheet),
+    visibility 0s linear var(--m-t-sheet);
   will-change: transform;
 }
 

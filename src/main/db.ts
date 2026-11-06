@@ -176,8 +176,12 @@ function migrateEventDone(): void {
 }
 
 /**
- * event_skip 同样需要行主键：它要参与同步，且回滚记录按 id 定位行。
- * 迁移形状与 migrateEventDone 一致：补列 → 回填 → 建唯一索引。
+ * event_skip 迁移：补行主键 + 补 deleted_at。
+ *
+ *  - id：它要参与同步，且回滚记录按 id 定位行（形状与 migrateEventDone 一致）。
+ *  - deleted_at：撤销「仅删除这天」时不能把行硬删 —— 删了以后同步没有墓碑，
+ *    别的设备下次拉取会把这天的跳过状态"忘掉"，那一条又冒出来了。
+ *    跟 events 一样用软删除，列表查询按 deleted_at IS NULL 过滤。
  */
 function migrateEventSkip(): void {
   const conn = requireDb()
@@ -185,6 +189,9 @@ function migrateEventSkip(): void {
   const hasId = cols.some((c) => c.name === 'id')
   if (!hasId) {
     conn.exec('ALTER TABLE event_skip ADD COLUMN id TEXT')
+  }
+  if (!cols.some((c) => c.name === 'deleted_at')) {
+    conn.exec('ALTER TABLE event_skip ADD COLUMN deleted_at INTEGER')
   }
   conn.exec(
     `UPDATE event_skip SET id = event_id || ':' || occurrence_date
@@ -687,11 +694,13 @@ export function listOccurrences(
       dates = [startDate]
     }
     if (dates.length === 0) continue
-    // 用户「仅删除本次」跳过的日期不再出现
+    // 用户「仅删除本次」跳过的日期不再出现（软删除的行不算）
     if (event.rrule) {
       const skipped = new Set(
         requireDb()
-          .prepare('SELECT occurrence_date FROM event_skip WHERE event_id = ?')
+          .prepare(
+            'SELECT occurrence_date FROM event_skip WHERE event_id = ? AND deleted_at IS NULL'
+          )
           .all(event.id)
           .map((r) => String(r.occurrence_date))
       )
@@ -760,12 +769,37 @@ export function skipOccurrence(eventId: string, date: string): void {
   recordSnapshot('仅删除本次', [{ table: 'event_skip', id }])
   requireDb()
     .prepare(
-      `INSERT INTO event_skip (id, event_id, occurrence_date, updated_at) VALUES (?, ?, ?, ?)
+      `INSERT INTO event_skip (id, event_id, occurrence_date, updated_at, deleted_at)
+       VALUES (?, ?, ?, ?, NULL)
        ON CONFLICT(event_id, occurrence_date) DO UPDATE SET
          id = excluded.id,
-         updated_at = excluded.updated_at`
+         updated_at = excluded.updated_at,
+         deleted_at = NULL`
     )
     .run(id, eventId, date, Date.now())
+}
+
+/** 撤销「仅删除这天」：给它打墓碑，列表就不会再过滤这一天 */
+export function unskipOccurrence(eventId: string, date: string): void {
+  assertDate(date)
+  const id = `${eventId}:${date}`
+  recordSnapshot('撤销仅删除本次', [{ table: 'event_skip', id }])
+  requireDb()
+    .prepare('UPDATE event_skip SET deleted_at = ?, updated_at = ? WHERE id = ?')
+    .run(Date.now(), Date.now(), id)
+}
+
+/** 撤销删除事件：清掉墓碑，整条事件连同重复规则一起回来 */
+export function restoreEvent(id: string): CalendarEvent {
+  const now = Date.now()
+  recordSnapshot('撤销删除事件', [{ table: 'events', id }])
+  const res = requireDb()
+    .prepare('UPDATE events SET deleted_at = NULL, updated_at = ? WHERE id = ?')
+    .run(now, id)
+  if (Number((res as { changes?: number }).changes ?? 0) === 0) {
+    throw new Error('事件不存在')
+  }
+  return getEvent(id)
 }
 
 /** 倒数日剩余天数（可为负表示已过） */
@@ -1136,7 +1170,8 @@ const TABLE_COLUMNS: Record<SyncTable, string[]> = {
   ],
   notes: ['id', 'calendar_id', 'title', 'content', 'pinned', 'color', 'created_at', 'updated_at', 'deleted_at'],
   event_done: ['id', 'event_id', 'occurrence_date', 'updated_at'],
-  event_skip: ['id', 'event_id', 'occurrence_date', 'updated_at']
+  // deleted_at 要参与同步：撤销「仅删除这天」是打墓碑，别的设备得知道
+  event_skip: ['id', 'event_id', 'occurrence_date', 'updated_at', 'deleted_at']
 }
 
 function snakeToCamel(key: string): string {
