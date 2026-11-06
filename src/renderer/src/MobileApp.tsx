@@ -161,6 +161,13 @@ export default function MobileApp(): React.JSX.Element {
   const [newCal, setNewCal] = useState('')
   const [calBusy, setCalBusy] = useState(false)
   const [confirmCal, setConfirmCal] = useState<string | null>(null)
+  /**
+   * 待确认的「删重复待办」。
+   *
+   * 重复待办点删除时不能直接删整条 —— 得问清楚是只删这一天，
+   * 还是把这个重复整个删掉（跟电脑端一套问法）。
+   */
+  const [confirmEvent, setConfirmEvent] = useState<EventOccurrence | null>(null)
   const [devices, setDevices] = useState<DeviceListResult['devices']>([])
   /** 连不上服务器（轮询失败）。只用来提示，不阻断任何操作 */
   const [offline, setOffline] = useState(false)
@@ -891,6 +898,38 @@ export default function MobileApp(): React.JSX.Element {
     await data.events.setDone(o.event.id, o.date, !o.done)
   }
 
+  /**
+   * 删重复待办：先问清楚删哪一部分。
+   *
+   * 以前手机上点删除直接把整个重复任务删了 —— 用户的其它日期也跟着没了。
+   * 电脑端一直有「仅删除这天 / 删除整个重复」的区分，手机端得跟上一致。
+   */
+  function requestRemoveEvent(o: EventOccurrence): void {
+    // 不是重复的（普通日程）直接删，不用问
+    if (!o.event.rrule) {
+      removeEvent(o)
+      return
+    }
+    setConfirmEvent(o)
+  }
+
+  /** 仅删除这一天：往 event_skip 插一行，别的地方还留着 */
+  async function skipOneOccurrence(target: EventOccurrence): Promise<void> {
+    const snapshot = events
+    setEvents(
+      events.filter((x) => !(x.event.id === target.event.id && x.date === target.date))
+    )
+    setConfirmEvent(null)
+    const res = await data.events.skip(target.event.id, target.date)
+    if (!res.ok) {
+      setEvents(snapshot)
+      say(res.error)
+      return
+    }
+    say('已删除这天')
+  }
+
+  /** 删除整个重复 */
   function removeEvent(o: EventOccurrence): void {
     const snapshot = events
     setEvents(events.filter((x) => !(x.event.id === o.event.id && x.date === o.date)))
@@ -1212,7 +1251,7 @@ export default function MobileApp(): React.JSX.Element {
                         it.type === 'event' ? (
                           <SwipeRow
                             key={`e-${it.occ.event.id}-${it.occ.date}`}
-                            onDelete={() => removeEvent(it.occ)}
+                            onDelete={() => requestRemoveEvent(it.occ)}
                             style={{ animationDelay: `${Math.min(rowIndex, 9) * 24}ms` }}
                           >
                             <div className="m-task">
@@ -1231,7 +1270,7 @@ export default function MobileApp(): React.JSX.Element {
                               )}
                               <button
                                 className="m-task-del"
-                                onClick={() => removeEvent(it.occ)}
+                                onClick={() => requestRemoveEvent(it.occ)}
                                 aria-label="删除"
                               >
                                 {Icon.x}
@@ -1594,6 +1633,49 @@ export default function MobileApp(): React.JSX.Element {
 
       <div className={`m-toast ${toast ? 'is-open' : ''}`} role="status">
         {toast}
+      </div>
+
+      {/* 删重复待办的确认框：常驻 DOM，开合只改 class */}
+      <div
+        className={`m-confirm-mask ${confirmEvent ? 'is-open' : ''}`}
+        onClick={() => setConfirmEvent(null)}
+        aria-hidden={!confirmEvent}
+      />
+      <div
+        className={`m-confirm ${confirmEvent ? 'is-open' : ''}`}
+        aria-hidden={!confirmEvent}
+        role="dialog"
+        aria-label="删除重复待办"
+      >
+        <div className="m-confirm-handle" />
+        <div className="m-confirm-title">删除重复待办</div>
+        <div className="m-confirm-text">
+          「{confirmEvent?.event.title ?? ''}」是重复待办，要删除哪一部分？
+        </div>
+        <div className="m-confirm-actions">
+          <button className="m-btn" onClick={() => setConfirmEvent(null)}>
+            取消
+          </button>
+          <button
+            className="m-btn"
+            onClick={() => {
+              if (confirmEvent) void skipOneOccurrence(confirmEvent)
+            }}
+          >
+            仅删除 {confirmEvent?.date.slice(5)} 这天
+          </button>
+          <button
+            className="m-btn m-btn-danger"
+            onClick={() => {
+              if (confirmEvent) {
+                removeEvent(confirmEvent)
+                setConfirmEvent(null)
+              }
+            }}
+          >
+            删除整个重复
+          </button>
+        </div>
       </div>
     </div>
   )

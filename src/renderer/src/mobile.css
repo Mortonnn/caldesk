@@ -1956,6 +1956,107 @@ textarea {
   flex: none;
 }
 
+/* ------------------------------ 确认弹窗 ------------------------------ */
+
+/*
+ * 「删重复待办」的确认框。
+ *
+ * 跟桌面端一套问法：仅删这天 / 删整个重复。
+ * 手机上不用遮罩+卡片（太小了挤），用底部弹层，跟加待办那个一个长相。
+ *
+ * 位置：贴着屏幕底部往上弹一截，不占满 —— 三个按钮挨得近，
+ * 手指按上面那个不用够太远，底下的按钮也不会顶到屏幕边缘。
+ */
+.m-confirm-mask {
+  position: fixed;
+  /* 整屏压暗：弹层是浮起来的，底下留一条亮着的 dock 很扎眼 */
+  inset: 0;
+  background: rgba(8, 10, 16, 0.5);
+  z-index: 70;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity var(--m-t-base) var(--m-ease),
+    visibility 0s linear var(--m-t-base);
+}
+
+.m-confirm-mask.is-open {
+  opacity: 1;
+  visibility: visible;
+}
+
+.m-confirm {
+  position: fixed;
+  left: 0;
+  right: 0;
+  /* 离底部留一段：三个按钮整块往上提，别贴着屏幕边 */
+  bottom: calc(var(--m-safe-bottom) + 44px);
+  z-index: 71;
+  background: var(--m-surface);
+  /* 浮起来的，四角都要圆 — 只圆上半截会像"从底边挤出来"的半截卡片 */
+  border-radius: 20px;
+  padding: 8px 16px 16px;
+  max-width: 560px;
+  margin: 0 auto;
+  box-shadow: 0 -8px 32px rgba(8, 12, 20, 0.2);
+  transform: translate3d(0, 100%, 0);
+  visibility: hidden;
+  transition:
+    transform var(--m-t-travel) var(--m-spring-travel),
+    visibility 0s linear var(--m-t-travel);
+  will-change: transform;
+}
+
+.m-confirm.is-open {
+  transform: none;
+  visibility: visible;
+  transition-delay: 0s;
+}
+
+.m-confirm-handle {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--m-stroke-strong);
+  margin: 4px auto 14px;
+}
+
+.m-confirm-title {
+  font-size: 16px;
+  font-weight: 650;
+  margin-bottom: 6px;
+}
+
+.m-confirm-text {
+  font-size: 14px;
+  color: var(--m-text-2);
+  margin-bottom: 16px;
+}
+
+.m-confirm-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/*
+ * 按钮比加待办那个高一点：拇指点得准。
+ *
+ * 注意要盖掉 .m-btn 的 flex: 1 —— 父容器是 column 方向，
+ * flex-basis 管的就是高度，不盖掉的话按钮会被压回 24px。
+ */
+.m-confirm-actions .m-btn {
+  flex: none;
+  height: 54px;
+  font-size: 16px;
+}
+
+/* 危险操作（删整个重复）用红色，跟"仅删这天"区分开 */
+.m-btn-danger {
+  background: var(--m-danger-soft);
+  color: var(--m-danger);
+}
+
 /* ------------------------------ 减少动态 ------------------------------ */
 
 @media (prefers-reduced-motion: reduce) {

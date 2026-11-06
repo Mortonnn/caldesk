@@ -350,7 +350,16 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
         if (!res.ok) return res as unknown as IpcResult<never>
         return { ok: true as const, data: { event: { id: eventId } as never, date, done } }
       },
-      skip: async () => ({ ok: true as const, data: true })
+      skip: async (eventId: string, date: string) => {
+        /*
+         * 「仅删除本次」：往 event_skip 插一行，列表时这一天的实例就被滤掉。
+         * 服务端 /api/events/skip 就是干这个的（行主键 = 事件id:日期）。
+         * 以前这里是空壳（直接返回成功、什么都不做），所以手机上删重复待办
+         * 只能走 remove → 整个重复全没了。
+         */
+        const res = await post<{ ok: boolean }>('/api/events/skip', { id: eventId, date })
+        return res.ok ? { ok: true as const, data: true } : (res as unknown as IpcResult<never>)
+      }
     },
 
     notes: {
