@@ -1,0 +1,448 @@
+/**
+ * ============================================================================
+ *  caldesk 设计令牌 —— 唯一来源
+ * ============================================================================
+ *
+ *  三套界面（桌面 / 手机 / 浮窗）共用这一份。任何颜色、字号、间距、圆角、
+ *  阴影、时长、曲线都必须在这里取值；组件里写死数值视为缺陷。
+ *
+ *  结构
+ *    1. 色（纸与墨 + 发丝线 + 强调色）
+ *    2. 材质（玻璃 / 染色 / 镜面边 / 颗粒 / 暗角）
+ *    3. 字（7 档字阶 + 4 个字重）
+ *    4. 空间（8 档间距 + 6 档圆角 + 3 级阴影）
+ *    5. 动效（两套方言：空间弹簧 + 非空间曲线）
+ *    6. 兼容别名（被 .preview 脚本按名读取的旧变量）
+ *
+ *  主题只由 prefers-color-scheme 决定（主进程用 nativeTheme.themeSource 控制，
+ *  渲染层不自己判断），所以这里只有 :root 一套深色 + 一个 light 覆盖块。
+ * ============================================================================
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* ------------------------------------------------------------------ 1. 色 */
+  /* 背景比上一版更深，给玻璃留出"抬升"的空间：玻璃必须比背后的面亮 6~12 L*，
+     否则就是灰盒子。这是深色材质最容易翻车的地方。 */
+  --bg-base: #090b0f;
+  --bg: #090b0f;
+  --bg-solid: #090b0f;
+
+  --surface: #171a21; /* 内容面：日格纸、任务列表底 —— 必须是全 app 最亮的一层 */
+  --surface-2: #1d222a; /* 抬起面：输入框、分段控件底 */
+  --surface-3: #262c37; /* 按下 / 选中底 */
+  --panel: #101319; /* 侧栏、详情栏、弹层面 */
+  --glass: #0f1216;
+
+  --bg-elev: rgba(255, 255, 255, 0.032);
+  --bg-elev-2: rgba(255, 255, 255, 0.062);
+  --bg-soft: rgba(255, 255, 255, 0.04);
+
+  /* 发丝线：所有分隔都靠它，不靠阴影 */
+  --hairline: rgba(255, 255, 255, 0.07);
+  --hairline-strong: rgba(255, 255, 255, 0.14);
+  --stroke: var(--hairline);
+  --stroke-strong: var(--hairline-strong);
+
+  --text: #e9ecf1;
+  --text-dim: #9aa2b0;
+  --text-faint: #7d8593;
+
+  --accent: #5b8cff;
+  --accent-soft: rgba(91, 140, 255, 0.14);
+  --accent-text: #9fbcff;
+  --accent-ink: #ffffff;
+  --event: #e0a34f;
+  --danger: #ff6369;
+  --danger-soft: rgba(255, 99, 105, 0.14);
+
+  /* ------------------------------------------------------------ 2. 材质 */
+  /* 统一光源：上方偏左 25°。顶边永远最亮，只有底边是暗边。 */
+  --rim-angle: 155deg;
+  --mat-veil: rgba(12, 14, 18, 0.66); /* 偏蓝的墨，不是纯黑 */
+  --mat-grad: linear-gradient(180deg, rgba(255, 255, 255, 0.055) 0%, rgba(255, 255, 255, 0.014) 100%);
+  --mat-lift: rgba(255, 255, 255, 0.05); /* 亮度抬升层：灰盒的解药 */
+  --rim-hi: rgba(255, 255, 255, 0.34);
+  --rim-mid: rgba(255, 255, 255, 0.1);
+  --rim-lo: rgba(0, 0, 0, 0.55);
+  --rim-inset: rgba(255, 255, 255, 0.1);
+  --vignette: radial-gradient(120% 100% at 50% 0%, transparent 50%, rgba(0, 0, 0, 0.16) 100%);
+  --grain-opacity: 0.05;
+  --glass-blur: 20px;
+  --glass-sat: 180%;
+
+  /* 环境层：玻璃背后必须有东西可透，但振幅要低 —— 太吵会把界面压成彩色噪声 */
+  --ambient-a: rgba(120, 160, 255, 0.055);
+  --ambient-b: rgba(255, 140, 180, 0.04);
+  --ambient-c: rgba(90, 255, 220, 0.03);
+
+  /* 遮罩：不压暗到黑，模糊内容本身 + 35% 压暗（Apple clear 变体的数字） */
+  --scrim: rgba(0, 0, 0, 0.45);
+  --scrim-dim: rgba(0, 0, 0, 0.35);
+  --scrim-blur: 9px;
+
+  --shadow-color: rgba(0, 0, 0, 0.55);
+  --shadow: var(--shadow-color);
+
+  /* -------------------------------------------------------------- 3. 字 */
+  --font-ui:
+    'Segoe UI Variable Display', 'Segoe UI Variable Text', 'Segoe UI', -apple-system,
+    'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Noto Sans CJK SC', system-ui, sans-serif;
+  --font-num: var(--font-ui);
+
+  --fs-display: 30px;
+  --lh-display: 34px;
+  --fs-title: 17px;
+  --lh-title: 22px;
+  --fs-body: 13px;
+  --lh-body: 20px;
+  --fs-label: 12px;
+  --lh-label: 16px;
+  --fs-caption: 11px;
+  --lh-caption: 14px;
+  --fs-micro: 10px;
+  --lh-micro: 13px;
+
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semi: 600;
+  --fw-bold: 700;
+
+  /* 只有拉丁大字号才收紧字距；中文一律 0，加字距立刻变廉价 */
+  --tracking-display: -0.02em;
+  --tracking-ui: 0;
+
+  /* ------------------------------------------------------------ 4. 空间 */
+  --s-1: 2px;
+  --s-2: 4px;
+  --s-3: 6px;
+  --s-4: 8px;
+  --s-5: 12px;
+  --s-6: 16px;
+  --s-7: 20px;
+  --s-8: 24px;
+  --s-9: 32px;
+
+  --r-chip: 6px;
+  --r-control: 10px;
+  --r-card: 14px;
+  --r-panel: 20px;
+  --r-window: 28px;
+  --r-pill: 999px;
+
+  /* 旧引用兼容（组件里还有 --radius-sm / -md / -lg） */
+  --radius-sm: var(--r-control);
+  --radius-md: var(--r-card);
+  --radius-lg: var(--r-window);
+
+  --e1: 0 1px 2px rgba(0, 0, 0, 0.18);
+  --e2: 0 8px 24px -8px var(--shadow-color), 0 1px 2px rgba(0, 0, 0, 0.12);
+  --e3: 0 24px 64px -24px var(--shadow-color), 0 4px 12px -6px rgba(0, 0, 0, 0.2);
+  --shadow-sm: var(--e1);
+  --shadow-md: var(--e3);
+
+  /* ------------------------------------------------------------ 5. 动效 */
+  /*
+   *  两套方言，永不混用：
+   *    · 空间类（位移/缩放/变形）用弹簧，参数是「阻尼比 + 响应时间」，
+   *      采样成 CSS linear()；过冲由弹簧自己产生。
+   *    · 非空间类（透明度/颜色/删除线）只用短曲线，不要把 alpha 挂在弹簧上。
+   *
+   *  弹簧曲线由 MIUI 的 EaseStyle(-2, 0.99, 0.38) 一类的参数解出：
+   *    ζ=0.99 τ=380ms → 500ms 落定，0% 过冲（年历缩放、面板进出）
+   *    ζ=0.72 τ=450ms → 540ms 落定，3.8% 过冲（选择透镜，MIUI 底栏药丸）
+   *    ζ=0.86 τ=260ms → 340ms 落定，0.5% 过冲（小物件落位、勾选、菜单项）
+   */
+  --ease-spatial: linear(
+    0,
+    0.0649 5%,
+    0.2005 10%,
+    0.3519 15%,
+    0.493 20%,
+    0.6133 25%,
+    0.7108 30%,
+    0.787 35%,
+    0.8451 40%,
+    0.8885 45%,
+    0.9204 50%,
+    0.9437 55%,
+    0.9604 60%,
+    0.9723 65%,
+    0.9808 70%,
+    0.9867 75%,
+    0.9908 80%,
+    0.9937 85%,
+    0.9957 90%,
+    0.9971 95%,
+    1
+  );
+  --ease-pill: linear(
+    0,
+    0.0587 5%,
+    0.1942 10%,
+    0.3599 15%,
+    0.5254 20%,
+    0.6728 25%,
+    0.7939 30%,
+    0.8866 35%,
+    0.9527 40%,
+    0.9964 45%,
+    1.0222 50%,
+    1.0348 55%,
+    1.0384 60%,
+    1.0364 65%,
+    1.0313 70%,
+    1.0249 75%,
+    1.0186 80%,
+    1.0128 85%,
+    1.0081 90%,
+    1.0045 95%,
+    1
+  );
+  --ease-pop: linear(
+    0,
+    0.0639 5%,
+    0.2034 10%,
+    0.3647 15%,
+    0.5185 20%,
+    0.6509 25%,
+    0.7573 30%,
+    0.8385 35%,
+    0.8978 40%,
+    0.9392 45%,
+    0.967 50%,
+    0.9847 55%,
+    0.9954 60%,
+    1.0012 65%,
+    1.004 70%,
+    1.005 75%,
+    1.0049 80%,
+    1.0043 85%,
+    1.0035 90%,
+    1.0027 95%,
+    1
+  );
+  /* 按压回弹（FlClash press 311 / .593，压缩到 240ms） */
+  --ease-press: linear(
+    0,
+    0.0421,
+    0.1473,
+    0.288,
+    0.4419,
+    0.593,
+    0.7299,
+    0.8463,
+    0.9391,
+    1.0083,
+    1.0556,
+    1.084,
+    1.0969,
+    1.0982,
+    1.0914,
+    1.0793,
+    1.0647,
+    1.0494,
+    1.0349,
+    1.0221,
+    1.0114,
+    1.0031,
+    0.9972,
+    0.9932,
+    0.991,
+    0.9902,
+    0.9905,
+    0.9914,
+    0.9927,
+    0.9942,
+    0.9957
+  );
+  /* 整块进出（抽屉、菜单位置，FlClash travel 400ms bounce .15） */
+  --ease-travel: linear(
+    0,
+    0.0206,
+    0.0728,
+    0.145,
+    0.2282,
+    0.3158,
+    0.4031,
+    0.4867,
+    0.5646,
+    0.6354,
+    0.6987,
+    0.7542,
+    0.8022,
+    0.8432,
+    0.8776,
+    0.9063,
+    0.9298,
+    0.9488,
+    0.9639,
+    0.9758,
+    0.985,
+    0.9919,
+    0.9971,
+    1.0007,
+    1.0033,
+    1.0049,
+    1.0058,
+    1.0062,
+    1.0063,
+    1.0061,
+    1.0057
+  );
+  /* 落定（允许 5% 过冲，用在需要"落位感"的地方） */
+  --ease-settle: linear(
+    0,
+    0.0321,
+    0.1129,
+    0.2225,
+    0.3455,
+    0.4704,
+    0.5889,
+    0.696,
+    0.7885,
+    0.8672,
+    0.9333,
+    0.9879,
+    1.0322,
+    1.0673,
+    1.0943,
+    1.1142,
+    1.1279,
+    1.1363,
+    1.1402,
+    1.1403,
+    1.1373,
+    1.1318,
+    1.1244,
+    1.1156,
+    1.1058,
+    1.0954,
+    1.0847,
+    1.0739,
+    1.0633,
+    1.053,
+    1.043
+  );
+
+  /* 非空间曲线 */
+  --ease-micro: cubic-bezier(0.3, 0.5, 0.7, 1.2); /* 小物件 pop，150ms，略过冲 */
+  --ease-alpha: cubic-bezier(0.33, 0, 0.2, 1); /* 透明度/颜色，200ms */
+  --ease-out: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --ease-in: cubic-bezier(0.3, 0, 0.8, 0.15);
+  --ease-emphasized: cubic-bezier(0.2, 0, 0, 1);
+  --ease-sheet: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-pop-out: cubic-bezier(0.2, 0.9, 0.25, 1.06);
+  --ease: var(--ease-out); /* 旧引用 */
+
+  /* 时长：四档 + 具名 */
+  --t-tap: 100ms;
+  --t-fast: 150ms;
+  --t-base: 200ms;
+  --t-page: 300ms;
+
+  --t-micro: 150ms;
+  --t-alpha: 200ms;
+  --t-pop: 340ms;
+  --t-spatial: 500ms;
+  --t-pill: 540ms;
+  --t-press: 240ms;
+  --t-travel: 412ms;
+  --t-sheet: 340ms;
+  --t-in: 240ms;
+  --t-out: 120ms;
+  --t-strike: 300ms;
+
+  /* ---------------------------------------------------------- 6. 兼容别名 */
+  /* 这些名字被 .preview/check-tokens*.mjs 按名读取，不能删。 */
+  --spring-droplet: var(--ease-pop);
+  --spring-travel: var(--ease-travel);
+  --spring-press: var(--ease-press);
+  --m-t-fast: var(--t-fast);
+  --m-t-page: var(--t-page);
+  --m-t-pop: var(--t-pop);
+  --m-t-enter: var(--t-in);
+}
+
+/* ============================== 浅色：纸 ============================== */
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+
+    --bg-base: #e7ebf2;
+    --bg: #e7ebf2;
+    --bg-solid: #e7ebf2;
+
+    --surface: #ffffff;
+    --surface-2: #f2f5fa;
+    --surface-3: #e6ebf3;
+    --panel: #fbfcfe;
+    --glass: #f7f9fb;
+
+    --bg-elev: rgba(17, 22, 30, 0.04);
+    --bg-elev-2: rgba(17, 22, 30, 0.07);
+    --bg-soft: rgba(17, 22, 30, 0.045);
+
+    --hairline: rgba(17, 22, 30, 0.08);
+    --hairline-strong: rgba(17, 22, 30, 0.16);
+
+    --text: #12161d;
+    --text-dim: #4f5866;
+    --text-faint: #697381;
+
+    --accent: #2f6bff;
+    --accent-soft: rgba(47, 107, 255, 0.1);
+    --accent-text: #2456d8;
+    --accent-ink: #ffffff;
+    --event: #d98a1f;
+    --danger: #d92d20;
+    --danger-soft: rgba(217, 45, 32, 0.09);
+
+    /* 浅色玻璃是"白为主体 + 阴影侧一圈暗边"，不是深色的反色 */
+    --mat-veil: rgba(255, 255, 255, 0.62);
+    --mat-grad: linear-gradient(180deg, rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0.28) 100%);
+    --mat-lift: rgba(255, 255, 255, 0.1);
+    --rim-hi: rgba(255, 255, 255, 0.95);
+    --rim-mid: rgba(255, 255, 255, 0.3);
+    --rim-lo: rgba(0, 0, 0, 0.1);
+    --rim-inset: rgba(255, 255, 255, 0.75);
+    --vignette: radial-gradient(120% 100% at 50% 0%, transparent 55%, rgba(0, 0, 0, 0.045) 100%);
+    --grain-opacity: 0.035;
+
+    --ambient-a: rgba(110, 150, 255, 0.13);
+    --ambient-b: rgba(255, 150, 185, 0.1);
+    --ambient-c: rgba(90, 220, 205, 0.08);
+
+    --scrim: rgba(15, 20, 30, 0.28);
+    --scrim-dim: rgba(15, 20, 30, 0.22);
+    --shadow-color: rgba(17, 22, 30, 0.18);
+    --shadow: var(--shadow-color);
+  }
+}
+
+/* ================= 降低动效：只留位移极小、时长极短的淡入 ================= */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --t-tap: 1ms;
+    --t-fast: 1ms;
+    --t-base: 1ms;
+    --t-page: 1ms;
+    --t-micro: 1ms;
+    --t-alpha: 1ms;
+    --t-pop: 1ms;
+    --t-spatial: 1ms;
+    --t-pill: 1ms;
+    --t-press: 1ms;
+    --t-travel: 1ms;
+    --t-sheet: 1ms;
+    --t-in: 1ms;
+    --t-out: 1ms;
+    --t-strike: 1ms;
+    --ease-spatial: linear(0, 1);
+    --ease-pill: linear(0, 1);
+    --ease-pop: linear(0, 1);
+    --ease-press: linear(0, 1);
+    --ease-travel: linear(0, 1);
+  }
+}

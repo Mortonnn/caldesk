@@ -1,0 +1,193 @@
+/**
+ * 动效层。
+ *
+ * 两套方言，永不混用（来自 MIUI 日历的逆向结论）：
+ *   · 空间类：位移 / 缩放 / 变形 → 弹簧（阻尼比 + 响应时间，采样成 linear()）
+ *   · 非空间类：透明度 / 颜色 / 删除线 → 只走短曲线，**不要把 alpha 挂在弹簧上**
+ *
+ * 三条硬规则（code review 逐条查）：
+ *   1. 带 backdrop-filter 的元素**及其任何祖先**，只允许动 transform 和 background-color。
+ *      动 opacity / filter / mask / clip-path 会让它变成 backdrop root，
+ *      玻璃在整段动画里彻底失效，结束后"啪"一下出现。
+ *   2. 永远不 transition: backdrop-filter（不插值，结束才跳）。
+ *   3. 不动 width / height / top / left。唯一例外是列表删除的高度塌陷（FLIP）。
+ */
+
+/*
+ * 老 WebView（Chromium < 113）不认 linear()：整条 transition 简写会被判无效，
+ * 所有弹簧变成瞬切，而且**没有任何报错**。这里退回等价贝塞尔。
+ */
+@supports not (transition-timing-function: linear(0, 1)) {
+  :root {
+    --ease-spatial: cubic-bezier(0.22, 0.61, 0.36, 1);
+    --ease-pill: cubic-bezier(0.34, 1.28, 0.44, 1);
+    --ease-pop: cubic-bezier(0.25, 0.8, 0.35, 1);
+    --ease-press: cubic-bezier(0.34, 1.28, 0.44, 1);
+    --ease-travel: cubic-bezier(0.22, 0.61, 0.36, 1);
+    --ease-settle: cubic-bezier(0.3, 1.2, 0.4, 1);
+  }
+}
+
+/* ------------------------------------------------------------ 进场钥匙 */
+
+/** 内容进场：4px 上浮 + 淡入。别整屏飞，位移只做"暗示方向" */
+@keyframes enter-up {
+  from {
+    opacity: 0;
+    transform: translate3d(0, var(--enter-y, 4px), 0);
+  }
+}
+
+/** 纯淡入。给"同一块内容换内容"用 */
+@keyframes enter-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+/** 换页：单轴进，25% 的位移距离已经太多，用 12~14px */
+@keyframes enter-x {
+  from {
+    opacity: 0;
+    transform: translate3d(calc(var(--dir, 1) * var(--enter-x, 12px)), 0, 0);
+  }
+}
+
+/** 弹层：从触发点那一角长出来，尾巴略过冲 */
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0) scale(0.94);
+  }
+}
+
+/** 小物件落位：勾号、今天圈、刚出现的 chip（150ms，3% 过冲） */
+@keyframes micro-pop {
+  from {
+    transform: scale(0.85);
+  }
+}
+
+/** 底部弹层升起 */
+@keyframes sheet-up {
+  from {
+    transform: translate3d(0, 100%, 0);
+  }
+}
+
+/** 面板从右侧进入（桌面侧面板） */
+@keyframes panel-in-right {
+  from {
+    transform: translate3d(100%, 0, 0);
+  }
+}
+
+/* ------------------------------------------------------------ 按压反馈 */
+/*
+ * 只覆盖 :active 期间的 transition：按下有弹性，松手立刻回到控件自己的快速过渡。
+ * 缩放值按尺寸分档：>48px 用 1.02 放大（玻璃会"鼓"起来），
+ * 小控件用 .96 收缩（更符合"被按下"的直觉）。
+ */
+.press {
+  transition: transform var(--t-press) var(--ease-press);
+  will-change: transform;
+}
+
+.press:active {
+  transform: scale(var(--press-scale, 0.96));
+}
+
+.press-lg:active {
+  transform: scale(1.02);
+}
+
+@media (hover: none) {
+  /* 触屏上按下反馈要更明显一点，否则感觉不到 */
+  .press:active {
+    transform: scale(calc(var(--press-scale, 0.96) - 0.02));
+  }
+}
+
+/* ------------------------------------------------------------ 指针高光 */
+/*
+ * 玻璃的"液态"感有一半来自这个：高光跟着指针在面内滑动。
+ * JS 只写两个数（--mx / --my），并把一帧内的多次 pointermove 合并成一次写。
+ * 只对精细指针开启 —— 触屏上没有 hover，白算。
+ */
+.sheen {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(
+    circle 60% at var(--mx, 30%) var(--my, 0%),
+    rgba(255, 255, 255, 0.14) 0%,
+    rgba(255, 255, 255, 0.04) 38%,
+    transparent 72%
+  );
+  transition: opacity var(--t-alpha) var(--ease-alpha);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .sheenable:hover .sheen {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sheen {
+    display: none;
+  }
+}
+
+/* --------------------------------------------------- 降低动效的位移补充 */
+/*
+ * base.css 已经把时长压到 1ms；这里再把"位移"这个语义也拿掉，
+ * 只保留透明度变化，避免极短的位移看起来像抽搐。
+ */
+@media (prefers-reduced-motion: reduce) {
+  @keyframes enter-up {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @keyframes enter-x {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @keyframes pop-in {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @keyframes sheet-up {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @keyframes panel-in-right {
+    from {
+      opacity: 0;
+    }
+  }
+
+  .press:active,
+  .press-lg:active {
+    transform: none;
+  }
+}
+
+/* ------------------------------------------------------ 滚动跟随的顶栏 */
+/*
+ * 顶栏的"磨砂程度"随滚动位置变化：只动 background-color，不动 backdrop-filter。
+ * （动 filter 会让玻璃重新变成 backdrop root，整段失效。）
+ */
+.scroll-tinted {
+  transition: background-color var(--t-base) var(--ease-alpha);
+}

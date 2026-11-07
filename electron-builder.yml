@@ -1,0 +1,44 @@
+appId: app.caldesk.desktop
+productName: caldesk
+copyright: caldesk
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - out/**/*
+  - package.json
+  - bin/**/*
+  - build/**/*
+  # 主进程与 preload 的第三方 import 只有 `electron` + `node:*` 内置模块
+  # （渲染层的 date-fns / framer-motion / react 已经打进 out/renderer 了），
+  # 所以打包时不需要任何 node_modules。不排除的话 asar 会从 ~2MB 涨到 28MB。
+  - '!node_modules/**/*'
+
+# CLI 与 MCP 桥需要随包分发，解压到 resources 下
+extraResources:
+  - from: bin
+    to: bin
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-setup.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: caldesk
+
+# 不签名（个人使用）；如需签名在此配置证书
+forceCodeSigning: false
+
+# 没有接入自动更新（src/main 里 autoUpdater / electron-updater 零命中）。
+# 不关掉的话 electron-builder 会从 git remote 编出一份 app-update.yml + latest.yml
+# 塞进安装包，把仓库 owner 名字暴露出去，还让人以为有更新通道。
+publish: null

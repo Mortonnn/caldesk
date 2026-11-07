@@ -1,0 +1,460 @@
+/**
+ * ============================================================================
+ *  浮窗（右下角常驻小窗）
+ * ============================================================================
+ *
+ *  窗口本身是 frame:false + transparent:true 的固定 304×320 方框（写死在
+ *  src/main/index.ts），由此推三条硬约束：
+ *
+ *  1. **不能用 backdrop-filter**。透明窗口背后是真实桌面，合成器不会把系统
+ *     桌面当成 backdrop 交给网页，所以模糊采不到任何东西 —— 那是一次纯亏的
+ *     全窗高斯模糊。真·半透明只能靠 rgba 染色 + 顶亮/底暗的 1px 镜面边 + 投影。
+ *
+ *  2. 阴影只能画在窗口里面。窗口 304×320 不能再大，所以 body 留 6px 透明边，
+ *     面板实际 292×308；投影也必须是一条能完整落进这 6px 的软影
+ *     （--e3 是 64px 模糊，会被窗口边缘切出一条硬线，详见 .mini 的注释）。
+ *
+ *  3. 可读性按"最坏壁纸"验算，两种主题都要过：
+ *     · 深色：0.72 的墨压在纯白壁纸上 ≈ rgb(80,80,80)，--text #e9ecf1 对它 ≈ 7.1:1
+ *     · 浅色：0.80 的白压在纯黑壁纸上 ≈ rgb(204,204,204)，--text #12161d 对它 ≈ 11.3:1
+ *
+ *  材质/排版/动效全部取 tokens.css 与 design/ 的令牌，这里只写布局。
+ * ============================================================================
+ */
+
+@import './tokens.css';
+@import './design/base.css';
+@import './design/material.css';
+@import './design/motion.css';
+
+/* 透明窗口：6px 透明边给面板投影落地（窗口尺寸由主进程固定，不能再大） */
+.mini-body {
+  padding: var(--s-3);
+  background: transparent;
+  overflow: hidden;
+}
+
+/* ------------------------------------------------------------------ 面板 */
+/*
+ * 材质 = 白色渐变（体感上亮下暗）+ 半透明墨（染色），两者都 padding-box，
+ * 镜面边交给内阴影：不占伪元素、圆角天然正确、没有亚像素偏差。
+ */
+.mini {
+  /* 本面板的染色浓度：比全局 --mat-veil（深 .66 / 浅 .62）更实一点，
+     因为浮窗底下是真实桌面，"纯白壁纸"这种最坏情况必须撑得住 */
+  --mat-veil: rgba(12, 14, 18, 0.72);
+
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  height: 100%;
+  padding: var(--s-4) var(--s-4) var(--s-3);
+  border-radius: var(--r-panel);
+  overflow: hidden;
+
+  background:
+    var(--mat-grad) padding-box,
+    linear-gradient(var(--mat-veil), var(--mat-veil)) padding-box;
+
+  /* 光源在左上 25°：顶边最亮、只有底边是暗边；四周一圈发丝线，没有 border */
+  box-shadow:
+    inset 0 1px 0 var(--rim-inset),
+    inset 0 -1px 0 var(--rim-lo),
+    inset 0 0 0 1px var(--hairline),
+    /* 外投影。这里刻意不用 --e3：它是 0 24px 64px -24px，向外要 32px 才落得干净，
+       而透明窗口只留得出 6px，多出来的部分会被窗口边缘切成一条硬直线。
+       用一条模糊半径刚好收在 6px 里的软影，浮动感一样有，且不会被切。 */
+    0 2px 16px -4px var(--shadow-color),
+    0 1px 3px -1px var(--shadow-color);
+
+  animation: enter-up var(--t-in) var(--ease-out) backwards;
+}
+
+@media (prefers-color-scheme: light) {
+  /* 浅色玻璃是"白为主体 + 阴影侧一圈暗边"，不是深色反色 */
+  .mini {
+    --mat-veil: rgba(255, 255, 255, 0.8);
+    /* 最坏情况是"纯白壁纸"：这时面板本身几乎就是纯白，
+       边界只能靠镜面边和投影撑住，所以浅色下把底边暗线和发丝线各加重一档 */
+    --rim-lo: rgba(0, 0, 0, 0.16);
+    --hairline: rgba(17, 22, 30, 0.14);
+  }
+}
+
+/* ------------------------------------------------------------------ 头部 */
+.mini-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: 0 var(--s-4);
+  -webkit-app-region: drag;
+  user-select: none;
+  cursor: default;
+}
+
+.mini-title {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  min-width: 0;
+}
+
+/* 日期是浮窗里唯一的主信息：17px / 600 / 等宽数字 */
+.mini-title strong {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  font-size: var(--fs-title);
+  line-height: var(--lh-title);
+  font-weight: var(--fw-semi);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+  letter-spacing: var(--tracking-ui);
+  color: var(--text);
+}
+
+.mini-mark {
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+}
+
+.mini-sub {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  color: var(--text-dim);
+}
+
+/* 待办数从行内文字变成一枚小药丸：扫读得到，不抢日期的戏 */
+.mini-count {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 var(--s-2);
+  border-radius: var(--r-pill);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: var(--fs-micro);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+  letter-spacing: var(--tracking-ui);
+}
+
+.mini-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  -webkit-app-region: no-drag;
+}
+
+.mini-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: var(--r-chip);
+  color: var(--text-dim);
+  transition:
+    background var(--t-fast) var(--ease-alpha),
+    color var(--t-fast) var(--ease-alpha),
+    transform var(--t-press) var(--ease-press);
+}
+
+.mini-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+.mini-btn:hover {
+  background: var(--bg-elev-2);
+  color: var(--text);
+}
+
+.mini-btn.on {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+/*
+ * 头部那颗"打开"：窗口被 OS 吃掉了 drag 区域的鼠标事件，
+ * onDoubleClick 基本按不到，所以主窗口入口必须是一个可见、可点的文字按钮。
+ */
+.mini-btn-open {
+  min-width: 0;
+  padding: 0 var(--s-3);
+  font-size: var(--fs-caption);
+  line-height: 1;
+  color: var(--text);
+  background: var(--bg-elev);
+  box-shadow:
+    inset 0 1px 0 var(--rim-inset),
+    inset 0 0 0 1px var(--hairline);
+}
+
+.mini-btn-open:hover {
+  background: var(--bg-elev-2);
+}
+
+/* ------------------------------------------------------------------ 列表 */
+.mini-list {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* 行铺满面板内宽（高亮和发丝线都到底），文字靠行自己的 padding 收回来：
+     面板 8 + 行 16 = 距面板边缘 16px，和头部标题的左边界对齐 */
+  margin: 0 calc(var(--s-4) * -1);
+  padding: 0;
+}
+
+.mini-empty {
+  margin: auto 0;
+  padding: var(--s-6) 0;
+  text-align: center;
+  font-size: var(--fs-label);
+  line-height: var(--lh-label);
+  color: var(--text-dim);
+  animation: enter-up var(--t-in) var(--ease-out) backwards;
+}
+
+/* 44px 一行；分隔线只用发丝线上内阴影，不用 margin/边框（会抖像素）。
+   行是通栏的，所以不加 border-radius —— 圆角会把发丝线的两端往下带，
+   看起来像一行一张卡片；直线上内阴影 + 通栏高亮才是"列表"。 */
+.mini-task-row {
+  display: flex;
+  flex: 0 0 44px;
+  align-items: center;
+  gap: var(--s-3);
+  height: 44px;
+  padding: 0 var(--s-6);
+  box-shadow: inset 0 1px 0 var(--hairline);
+  transition:
+    background var(--t-fast) var(--ease-alpha),
+    transform var(--t-press) var(--ease-press);
+  animation: enter-up var(--t-in) var(--ease-out) backwards;
+}
+
+.mini-task-row:hover {
+  background: var(--bg-elev);
+}
+
+/*
+ * 日程（事件 / 提醒 / 倒数日）：和任务同排，但左侧字形不同 ——
+ * 事件用**圆形**勾选（任务用方形），倒数日根本没有勾选、只有色点。
+ */
+.mini-agenda {
+  --mini-check-radius: var(--r-pill);
+}
+
+.mini-agenda-dot {
+  flex: 0 0 6px;
+  width: 6px;
+  height: 6px;
+  /* 6 + 6×2 = 18，正好占住勾选框那一列，两种行的文字左边界对齐 */
+  margin: 0 var(--s-3);
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px var(--bg-soft);
+}
+
+/*
+ * 日程组 / 任务组之间的组间分隔。
+ * 行自己已经各带一条发丝线了，这里再画一条就成了双线（5px 内两条 1px 线，很脏），
+ * 所以它只是一段留白：真正的分界线是下面那条任务行的上边线。
+ */
+.mini-sep {
+  flex: 0 0 var(--s-3);
+  height: var(--s-3);
+  background: transparent;
+}
+
+/* 18px 勾选框：勾号是一次 --t-micro 的 pop 长出来的，不是瞬间贴上 */
+.mini-check {
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  /* 任务行方形、日程行圆形（--mini-check-radius 由 .mini-agenda 覆写） */
+  border-radius: var(--mini-check-radius, var(--r-chip));
+  border: 1px solid var(--hairline-strong);
+  background: transparent;
+  transition:
+    background var(--t-fast) var(--ease-alpha),
+    border-color var(--t-fast) var(--ease-alpha),
+    transform var(--t-press) var(--ease-press);
+}
+
+.mini-check:hover {
+  border-color: var(--accent);
+}
+
+.mini-check.checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.mini-check.checked::after {
+  content: '';
+  display: block;
+  width: 4px;
+  height: 8px;
+  margin: -2px auto 0;
+  border: solid var(--accent-ink);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+  animation: mini-check-pop var(--t-micro) var(--ease-micro) backwards;
+}
+
+@keyframes mini-check-pop {
+  from {
+    opacity: 0;
+    transform: rotate(45deg) scale(0.55);
+  }
+}
+
+.mini-task-text {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+  font: inherit;
+  font-size: var(--fs-label);
+  line-height: var(--lh-label);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: color var(--t-fast) var(--ease-alpha);
+}
+
+.mini-task-row.done .mini-task-text {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+
+/* 日历身份色点：5px 已经够认，不再加字 */
+.mini-cal-dot {
+  flex: 0 0 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  opacity: 0.85;
+}
+
+/* ------------------------------------------------------------------ 底栏 */
+.mini-foot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding-top: var(--s-2);
+  box-shadow: inset 0 1px 0 var(--hairline);
+}
+
+.mini-open {
+  width: 100%;
+  height: 30px;
+  border-radius: var(--r-control);
+  background: var(--bg-elev);
+  box-shadow:
+    inset 0 1px 0 var(--rim-inset),
+    inset 0 0 0 1px var(--hairline);
+  color: var(--text);
+  font-size: var(--fs-caption);
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background var(--t-fast) var(--ease-alpha),
+    color var(--t-fast) var(--ease-alpha),
+    transform var(--t-press) var(--ease-press);
+}
+
+.mini-open:hover {
+  background: var(--bg-elev-2);
+}
+
+/* 4px 细条，且要显式把 base.css 的 border/background-clip 覆盖掉，
+   否则 4px 宽减去 3px×2 的透明边 = 0，滚动条看不见 */
+.mini-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.mini-list::-webkit-scrollbar-thumb {
+  background: var(--hairline-strong);
+  border: none;
+  border-radius: var(--r-pill);
+  background-clip: border-box;
+}
+
+/* ------------------------------ 按压反馈 ------------------------------ */
+
+.mini-btn:active,
+.mini-check:active {
+  transform: scale(0.94);
+}
+
+.mini-task-row:active {
+  transform: scale(0.985);
+}
+
+.mini-open:active {
+  transform: scale(0.975);
+}
+
+/* ------------------------------ 逐行错开进场 ------------------------------ */
+/*
+ * 只给 animation-delay + fill-mode: backwards。
+ * 绝不用 both —— both 会把 transform 钉在动画末帧，:active 的按压缩放就永远不生效；
+ * backwards 只保证"延迟期间先停在 from 帧"，动画结束后属性回到正常态。
+ */
+.mini-list > :nth-child(1) {
+  animation-delay: 0ms;
+}
+.mini-list > :nth-child(2) {
+  animation-delay: 24ms;
+}
+.mini-list > :nth-child(3) {
+  animation-delay: 48ms;
+}
+.mini-list > :nth-child(4) {
+  animation-delay: 72ms;
+}
+.mini-list > :nth-child(5) {
+  animation-delay: 96ms;
+}
+.mini-list > :nth-child(6) {
+  animation-delay: 120ms;
+}
+.mini-list > :nth-child(7) {
+  animation-delay: 144ms;
+}
+.mini-list > :nth-child(8) {
+  animation-delay: 168ms;
+}
+.mini-list > :nth-child(9) {
+  animation-delay: 192ms;
+}
+.mini-list > :nth-child(10) {
+  animation-delay: 216ms;
+}
+.mini-list > :nth-child(11) {
+  animation-delay: 240ms;
+}
+.mini-list > :nth-child(12) {
+  animation-delay: 264ms;
+}
+/* 第 13 行往后不再继续加延迟：否则它们会抢在第 1 行之前出现 */
+.mini-list > :nth-child(n + 13) {
+  animation-delay: 264ms;
+}

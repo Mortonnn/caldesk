@@ -1,0 +1,15 @@
+# 统一成 LF。Windows 上默认会按 autocrlf 转成 CRLF，
+# 结果改一行就变成整文件 diff（这个仓库里已经有几个上千行的文件，
+# 一旦被转换，review 就废了）。
+* text=auto eol=lf
+
+# 二进制资源不要被当文本处理
+*.png binary
+*.ico binary
+*.exe binary
+*.apk binary
+*.asar binary
+
+# 生成物不参与语言统计
+package-lock.json linguist-generated=true
+worker/package-lock.json linguist-generated=true

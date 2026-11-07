@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="color-scheme" content="light dark" />
+    <!-- 状态栏跟着主题走：浅色是纸，深色是墨 -->
+    <meta name="theme-color" content="#eef1f5" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0c0e12" media="(prefers-color-scheme: dark)" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:* http://localhost:* https:"
+    />
+    <title>caldesk</title>
+    <style>
+      /*
+       * 没有启动页。
+       *
+       * 这里只写网页自己的底色：系统开屏（styles.xml 里的 launch_bg）用的是同一个色，
+       * 所以点开图标是这张纸，React 首帧画出来还是这张纸，中间没有图标要淡出，
+       * 也没有第二层遮罩要等。省掉的就是白屏时间。
+       */
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #eef1f5;
+      }
+      @media (prefers-color-scheme: dark) {
+        html,
+        body {
+          background: #0c0e12;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/mobile.tsx"></script>
+  </body>
+</html>

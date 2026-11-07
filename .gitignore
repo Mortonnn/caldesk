@@ -1,0 +1,33 @@
+# 依赖
+node_modules/
+
+# 构建产物
+out/
+dist/
+release/
+/android/
+/ios/
+*.apk
+
+# 本地数据与凭证（绝不入库）
+*.db
+*.db-wal
+*.db-shm
+.preview/
+.dev.vars
+sync.json
+*.log
+.env
+.env.local
+.wrangler/
+
+# 测试报告与截图（含真机序列号、本机绝对路径、线上域名，只留在本地）
+notes/
+.agents/
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 测试截图（15MB 量级，用 `node scripts/ui-desktop.mjs --shots` 等随时重新生成，仓库里只留报告正文）
+notes/test-reports/shots-*/

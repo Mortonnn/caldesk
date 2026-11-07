@@ -1,0 +1,1896 @@
+@import './tokens.css';
+@import './design/base.css';
+@import './design/material.css';
+@import './design/motion.css';
+
+/* =========================================================================
+ * 手机端布局（Capacitor Android WebView / 移动浏览器）
+ *
+ * 结构：顶栏 / 月历纸 + 当天 / 列表页（即将、设置）/ 液态玻璃底栏 / 底部弹层
+ *
+ * 材质分工（详见 design/material.css，和桌面端同一套）：
+ *   顶栏、日历菜单、底栏、FAB、底部弹层 —— 染色玻璃：染色 + 镜面边 + 抬升
+ *   其中只有顶栏 / 菜单 / 底栏 / FAB 用真模糊，因为只有它们底下有会动的东西可透；
+ *   弹层下面是已经糊掉的内容，不必再模糊一次
+ *   月历纸、卡片、任务行、设置行 —— 不透明内容面（--surface），不带模糊
+ *
+ * 手机才有的三个决定：拇指可达（行 ≥44px、底栏 56px）、窄屏字阶（正文 15px）、
+ * 安全区（刘海 / 手势条 / 横屏圆角缺口）全部让位。颜色、曲线、时长、圆角一律取令牌。
+ * ========================================================================= */
+
+/* ------------------------------ 令牌：手机档位 ------------------------------ */
+/*
+ * 只覆盖三组"手机需要重新标定"的东西：
+ *   1. 字阶：整体抬一档，display 反而压低 —— 24px 的「2026年11月」再大就会挤掉
+ *      右上角的日历按钮（那是切换日历的唯一入口，不能被标题吃掉）。
+ *   2. 几何：底栏高度、最小触控边长、页面边距。
+ *   3. 兼容别名：被 .preview 脚本按名读取、以及 JSX 内联样式写死的少数名字。
+ */
+:root {
+  --fs-display: 24px;
+  --lh-display: 28px;
+  --fs-body: 15px;
+  --lh-body: 21px;
+  --fs-label: 13px;
+  --lh-label: 18px;
+  --fs-caption: 12px;
+  --lh-caption: 16px;
+  --fs-micro: 11px;
+  --lh-micro: 14px;
+
+  /* 输入框不能跟着正文降到 15px：iOS 的聚焦自动放大阈值是 16px */
+  --m-fs-input: 16px;
+  /* 页面左右边距：顶栏、月历纸、当天、列表共用同一条，否则四块内容对不齐 */
+  --m-gutter: var(--s-6);
+  /* 最小触控边长：手指比鼠标粗，行、格、按钮都不低于这个数 */
+  --m-tap: 44px;
+  /* 底栏高度。GlassDock.tsx 的透镜公式把它写死成 56，改这里必须同步改那里 */
+  --m-dock-h: 56px;
+
+  /* 安全区：上下是刘海和手势条，左右是横屏时的圆角缺口 */
+  --m-safe-t: env(safe-area-inset-top, 0px);
+  --m-safe-b: env(safe-area-inset-bottom, 0px);
+  --m-safe-l: env(safe-area-inset-left, 0px);
+  --m-safe-r: env(safe-area-inset-right, 0px);
+
+  /* 底部弹层上扬：从屏幕外进来的东西不该回弹，只减速 */
+  --m-ease-sheet: var(--ease-sheet);
+
+  /* 兼容别名 —— 不能改名。JSX 的内联样式里写了 var(--m-accent)，
+     .preview/check-tokens2.mjs 又按名读 --m-ease-pop-out */
+  --m-accent: var(--accent);
+  --m-ease-pop-out: var(--ease-pop-out);
+}
+
+/* ------------------------------ 根与外壳 ------------------------------ */
+/*
+ * 底色只画一次（在最底下的 #root 上），.m-shell 保持透明：
+ * 环境层（.mat-ambient）是插在 shell 里的 absolute 元素，shell 一旦刷了不透明底
+ * 就把它整块盖死 —— 玻璃背后没有东西可透，界面立刻变成一片灰盒子。
+ */
+#root {
+  background: var(--bg-base);
+  /* base.css 只关了 button 的点击高亮；手机端 div 也可点（行、格子），在根上继承 */
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  /* 整页不滚：只有 .m-body 自己滚，地址栏或键盘的抖动就带不动顶栏 */
+  overscroll-behavior: none;
+}
+
+.m-shell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  max-width: 560px;
+  margin: 0 auto;
+  /* 横屏圆角机型的左右缺口：流内内容在这里一次性内让，
+     固定定位的浮层（底栏、弹层、菜单）各自再让一次 */
+  padding-left: var(--m-safe-l);
+  padding-right: var(--m-safe-r);
+}
+
+/* 流内内容抬到环境层之上（同桌面端 .app > *）。只圈这三个：
+   底栏和弹层是 fixed 的，统一改 z-index 会把它们的层级顺序冲掉 */
+.m-top,
+.m-body,
+.m-offline {
+  position: relative;
+  z-index: 1;
+}
+
+/* ------------------------------ chrome 的镜面边 ------------------------------ */
+/*
+ * 材质层 .mat-chrome 的那四层，一次写清（顶亮 / 底暗 / 一圈发丝线 / 外投影）：
+ * 统一光源在左上偏 25°，所以顶边永远最亮、只有底边是暗边。
+ * 抬升高度用 --elev 就地覆盖，避免每个面重复抄一遍整串阴影。
+ */
+.m-top,
+.m-menu,
+.m-dock-glass,
+.m-sheet,
+.m-confirm,
+.m-fab {
+  box-shadow:
+    inset 0 1px 0 var(--rim-inset),
+    inset 0 -1px 0 var(--rim-lo),
+    inset 0 0 0 1px var(--hairline),
+    var(--elev, var(--e1));
+}
+
+/* ------------------------------ 顶栏 ------------------------------ */
+/*
+ * 顶栏是 chrome。它背后是环境层的柔光，模糊做的是把那层柔光推开一点，
+ * 让"顶栏浮在纸上"和"底栏浮在纸上"是同一个观感。
+ * 高度不定死：安全区 + 12（上）+ 32（胶囊）+ 8（下），横竖屏都不用手算。
+ */
+.m-top {
+  flex: none;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  padding: calc(var(--m-safe-t) + var(--s-5)) var(--m-gutter) var(--s-4);
+  background:
+    var(--mat-grad) padding-box,
+    linear-gradient(var(--mat-veil), var(--mat-veil)) padding-box;
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+}
+
+.m-top-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+}
+
+.m-brand {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  color: var(--accent);
+}
+
+/* 换月/换页时只有这几个字变（key={title} 重挂载），给它 2px 上浮，标题就不会硬切 */
+.m-top-month {
+  font-size: var(--fs-display);
+  line-height: var(--lh-display);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-display);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  --enter-y: var(--s-1);
+  animation: enter-up var(--t-fast) var(--ease-alpha) backwards;
+}
+
+/* 右上角日历切换：胶囊。底是内容面色而不是玻璃 ——
+   它压在玻璃顶栏上，两层玻璃会互相抵消成一层灰 */
+.m-cal-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  height: 32px;
+  padding: 0 var(--s-3) 0 var(--s-4);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  color: var(--text);
+  font-size: var(--fs-label);
+  font-weight: var(--fw-semi);
+  white-space: nowrap;
+  transition:
+    background-color var(--t-fast) var(--ease-out),
+    box-shadow var(--t-fast) var(--ease-out);
+}
+
+.m-cal-btn.on {
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--hairline-strong);
+}
+
+.m-cal-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.m-cal-name {
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.m-cal-chev {
+  display: grid;
+  place-items: center;
+  color: var(--text-faint);
+  transition: transform var(--t-pop) var(--ease-pop);
+}
+
+.m-cal-chev svg {
+  width: 14px;
+  height: 14px;
+}
+
+.m-cal-btn.on .m-cal-chev {
+  transform: rotate(180deg);
+  color: var(--accent);
+}
+
+/* ------------------------------ 菜单与遮罩 ------------------------------ */
+
+/* 三张遮罩只干一件事：接住点击。背景全透明，所以没有可淡的东西，只切 visibility */
+.m-menu-mask,
+.m-sheet-mask,
+.m-confirm-mask {
+  position: fixed;
+  inset: 0;
+  background: transparent;
+  visibility: hidden;
+}
+
+.m-menu-mask,
+.m-confirm-mask {
+  z-index: 70;
+}
+
+.m-sheet-mask {
+  z-index: 50;
+}
+
+.m-menu-mask.is-open,
+.m-sheet-mask.is-open,
+.m-confirm-mask.is-open {
+  visibility: visible;
+}
+
+/*
+ * 菜单是一张不透明面板（和桌面端重复规则菜单同一套材料），**不用 backdrop-filter**。
+ *
+ * 为什么去掉模糊：收起要在 340ms 里缩放 + 淡出，带模糊的元素每帧都要重新采样背景，
+ * 最后一帧还要销毁合成层 —— 用户看到的就是"收起时卡一下"。
+ * 它只有 180×100，底下是静止的纸面，模糊的视觉收益接近于零；
+ * 去掉之后收起退化成纯 transform + opacity，合成器自己就能跑完，不碰主线程。
+ */
+.m-menu {
+  position: fixed;
+  /* 顶栏实高 = 安全区 + 12 + 32（胶囊）+ 8 */
+  top: calc(var(--m-safe-t) + var(--s-5) + var(--s-9) + var(--s-4));
+  right: calc(var(--m-safe-r) + var(--s-5));
+  z-index: 71;
+  min-width: 184px;
+  max-width: 74vw;
+  padding: var(--s-3);
+  border-radius: var(--r-card);
+  overflow: hidden;
+  background: var(--panel);
+  box-shadow:
+    inset 0 0 0 1px var(--hairline),
+    var(--e3);
+  transform-origin: top right;
+  transform: scale(0.94) translate3d(0, calc(var(--s-2) * -2), 0);
+  opacity: 0;
+  pointer-events: none;
+  /* 淡出和缩放同一时长：两段错开的话会"先消失还在缩"，看着像卡了一下 */
+  transition:
+    transform var(--t-pop) var(--ease-pop),
+    opacity var(--t-pop) var(--ease-alpha);
+}
+
+.m-menu.is-open {
+  transform: none;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.m-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  width: 100%;
+  height: var(--m-tap);
+  padding: 0 var(--s-3);
+  border-radius: var(--r-control);
+  color: var(--text);
+  font-size: var(--fs-body);
+  font-weight: var(--fw-medium);
+  text-align: left;
+  transition: background-color var(--t-fast) var(--ease-out);
+}
+
+.m-menu-item:active {
+  background: var(--bg-elev-2);
+}
+
+.m-menu-item.on {
+  color: var(--accent-text);
+}
+
+.m-menu-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.m-menu-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.m-menu-check {
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: var(--accent);
+}
+
+.m-menu-check svg {
+  width: 17px;
+  height: 17px;
+  stroke-width: 2;
+}
+
+/* ------------------------------ 内容区 ------------------------------ */
+/*
+ * 唯一滚动容器。底部要给浮起来的底栏让位（底栏 + 一段呼吸 + 安全区），
+ * 否则最后一行永远压在玻璃底下点不到。
+ */
+.m-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  padding-bottom: calc(var(--m-safe-b) + var(--m-dock-h) + var(--s-8));
+  transition: filter var(--t-base) var(--ease-alpha);
+}
+
+/* base.css 给滚动条做了 10px 常驻样式；手机上没鼠标，那 10px 是纯损宽度。
+   这不是重复 base.css，是手机档位对同一条规则的收窄。
+   另：顶栏不参与这次失焦 —— 壳保持清晰、内容糊掉，层才立得住。 */
+.m-body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+/* 打开弹层时内容整体失焦：用 filter 而不是 backdrop-filter ——
+   WebView 里 backdrop-filter 的 transition 只改计算值不逐帧重绘，
+   看起来是"啪一下糊死"；filter 是逐帧真渲染的 */
+.m-shell.is-blurred .m-body {
+  filter: blur(var(--scrim-blur));
+}
+
+/* 读数据失败：不要静默留一个空日历。常驻在内容最上面，点一下重试 */
+.m-load-error {
+  display: block;
+  width: calc(100% - var(--m-gutter) * 2);
+  margin: var(--s-4) auto 0;
+  padding: var(--s-4) var(--s-5);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  color: var(--danger);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-semi);
+  text-align: center;
+}
+
+/* ------------------------------ 连接状态 ------------------------------ */
+/*
+ * 轮询失败时常驻在顶栏下面：颜色克制，只说明状态、点一下重试，不弹窗打断。
+ * 进场用 backwards 而不是 both —— both 会把 transform 永久钉在最后一帧，
+ * 这个横幅自己的 :active 就再也压不下去了。
+ */
+.m-offline {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  margin: 0 var(--m-gutter) var(--s-4);
+  padding: var(--s-4) var(--s-5);
+  border-radius: var(--r-card);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-medium);
+  text-align: left;
+  --enter-y: calc(var(--s-1) * -2);
+  animation: enter-up var(--t-base) var(--ease-out) backwards;
+  transition:
+    background-color var(--t-fast) var(--ease-out),
+    transform var(--t-press) var(--ease-press);
+}
+
+.m-offline:active {
+  transform: scale(0.99);
+}
+
+.m-offline-dot {
+  flex: 0 0 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  /* 无限呼吸灯没有对应令牌（令牌里最长一档是一次动作的时长），就地写明这 1.6s 的节奏 */
+  animation: m-offline-pulse 1.6s var(--ease-out) infinite;
+}
+
+@keyframes m-offline-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* ------------------------------ 月历纸 ------------------------------ */
+/*
+ * 一张连续的纸，不是 42 张卡片（卡片网格是通用后台的默认长相）。
+ * 纸面由 .m-grid 自己画（--surface + 一圈发丝边），格子透明，
+ * 分隔线用每格的内阴影画：右一道、下一道，最后一行/列去掉 ——
+ * 这样"今天 / 选中"的底色才能压在纸面之上、数字之下。
+ */
+.m-dow-row {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 0;
+  padding: var(--s-4) var(--m-gutter) var(--s-3);
+}
+
+.m-grid-dow {
+  text-align: center;
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-medium);
+  color: var(--text-faint);
+}
+
+/* 翻月视口：横向手势归自己，纵向留给页面滚动 */
+.m-pager {
+  overflow: hidden;
+  touch-action: pan-y;
+}
+
+/* 三页并排，静止时停在中间那页；位移一律用 %，不去量宽度。
+   吸附必须是 412ms 的 travel 弹簧：JS 的兜底定时器就是按这个数写的，
+   换成别的时长会在动画没走完时提前换页 */
+.m-track {
+  display: flex;
+  transform: translate3d(-100%, 0, 0);
+  transition: transform var(--t-travel) var(--ease-travel);
+  will-change: transform;
+}
+
+.m-pane {
+  flex: 0 0 100%;
+  min-width: 100%;
+  padding: 0 var(--m-gutter);
+}
+
+.m-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0;
+  overflow: hidden;
+  border-radius: var(--r-card);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--hairline), var(--e1);
+}
+
+.m-grid-cell {
+  position: relative;
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  color: var(--text);
+  /* 分隔线：右 + 下各一道发丝线，最后一行/列去掉，免得纸边多一道 */
+  box-shadow: inset -1px 0 0 var(--hairline), inset 0 -1px 0 var(--hairline);
+}
+
+.m-grid-cell:nth-child(7n) {
+  box-shadow: inset 0 -1px 0 var(--hairline);
+}
+
+.m-grid-cell:nth-last-child(-n + 7) {
+  box-shadow: inset -1px 0 0 var(--hairline);
+}
+
+.m-grid-cell:nth-child(7n):nth-last-child(-n + 7) {
+  box-shadow: none;
+}
+
+/*
+ * 选中 / 今天都画在同一层（::before），而且**只有过渡、没有关键帧**。
+ * 以前这层同时挂了 transition 和 animation，两个机制抢 opacity/transform，
+ * 落定值取决于谁最后跑完 —— 手快点两天就看见闪。现在只保留过渡，落定值唯一。
+ */
+.m-grid-cell::before {
+  content: '';
+  position: absolute;
+  inset: var(--s-1);
+  border-radius: var(--r-chip);
+  background: transparent;
+  box-shadow: none;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity var(--t-fast) var(--ease-alpha),
+    background-color var(--t-fast) var(--ease-alpha),
+    box-shadow var(--t-fast) var(--ease-alpha);
+}
+
+/* 今天：一圈强调色细边，不填色 —— 一屏只允许"选中"那一块是实心的 */
+.m-grid-today::before {
+  box-shadow: inset 0 0 0 1px var(--accent);
+  opacity: 0.55;
+}
+
+/* 选中：强调色淡染 + 一圈淡边，不是一块肥卡片 */
+.m-grid-selected::before {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 42%, transparent);
+  opacity: 1;
+}
+
+/* 数字压在选择层之上；按压只缩数字，不缩格子（缩格子会让整张纸抖） */
+.m-grid-num {
+  position: relative;
+  z-index: 1;
+  font-size: var(--fs-body);
+  line-height: 1;
+  font-weight: var(--fw-medium);
+  color: var(--text-dim);
+  transition: color var(--t-fast) var(--ease-alpha), transform var(--t-tap) var(--ease-out);
+}
+
+.m-grid-cell:active .m-grid-num {
+  transform: scale(0.9);
+}
+
+/* 非本月只降颜色，不再叠一层 opacity（两个机制描述同一件事是多余的） */
+.m-grid-out .m-grid-num {
+  color: var(--text-faint);
+}
+
+.m-grid-today .m-grid-num {
+  color: var(--accent);
+  font-weight: var(--fw-bold);
+}
+
+.m-grid-selected .m-grid-num {
+  color: var(--accent-text);
+  font-weight: var(--fw-semi);
+}
+
+/* 一格底下最多两个点：有任务一个、有日程一个 */
+.m-grid-dots {
+  position: absolute;
+  inset: auto 0 var(--s-2) 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-1);
+  pointer-events: none;
+}
+
+.m-grid-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+}
+
+.m-grid-dot-task {
+  background: var(--accent);
+}
+
+.m-grid-dot-event {
+  background: var(--event);
+}
+
+/* ------------------------------ 当天 ------------------------------ */
+/*
+ * 一天的头部 + 一张卡片装当天的全部条目。
+ * 卡片是不透明内容面：行与行之间只有一道发丝线，行本身不再各带边框和圆角
+ * （"每行一张小卡"是手机端最典型的模板感来源）。
+ */
+.m-day {
+  padding: 0 var(--m-gutter) var(--s-8);
+}
+
+.m-day-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-5);
+  min-height: var(--m-tap);
+  padding: var(--s-6) 0 var(--s-4);
+}
+
+.m-day-title {
+  font-size: var(--fs-title);
+  line-height: var(--lh-title);
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--tracking-ui);
+}
+
+.m-today-btn {
+  margin-left: auto;
+  height: 32px;
+  padding: 0 var(--s-5);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  color: var(--accent-text);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-semi);
+  transition:
+    background-color var(--t-fast) var(--ease-out),
+    transform var(--t-press) var(--ease-press);
+}
+
+.m-today-btn:active {
+  background: var(--accent-soft);
+  transform: scale(0.94);
+}
+
+.m-section {
+  margin-bottom: var(--s-6);
+}
+
+.m-card {
+  overflow: hidden;
+  border-radius: var(--r-card);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+/* 卡片里的一行：高度不小于 44px，行距由内边距给，内容永远垂直居中 */
+.m-task {
+  display: flex;
+  align-items: center;
+  gap: var(--s-5);
+  min-height: var(--m-tap);
+  padding: var(--s-3) var(--s-4);
+  transition: background-color var(--t-fast) var(--ease-out);
+}
+
+.m-task:active {
+  background: var(--surface-2);
+}
+
+/* 勾选圈：24px 的圆 + 1.5px 的环，行的 44px 保证手指点得到 */
+.m-task-check {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-pill);
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--hairline-strong);
+  color: var(--accent-ink);
+  transition:
+    background-color var(--t-fast) var(--ease-out),
+    box-shadow var(--t-fast) var(--ease-out),
+    transform var(--t-press) var(--ease-press);
+}
+
+.m-task-check svg {
+  width: 13px;
+  height: 13px;
+  stroke-width: 2.4;
+}
+
+.m-task-check.m-task-check-on {
+  background: var(--accent);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+  /* 勾上的一下轻弹：150ms、3% 过冲，和桌面勾选框同一套 keyframes */
+  animation: micro-pop var(--t-micro) var(--ease-micro);
+}
+
+/* 文字和删除线同步 300ms 走完：快了像闪一下，慢了像卡住 */
+.m-task-text {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  word-break: break-word;
+  transition: color var(--t-strike) var(--ease-alpha);
+}
+
+/* 删除线只画在文字上，不拉满整行：外层 flex:1 是布局用的，宽度会撑到行尾 */
+.m-task-label {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
+
+/*
+ * 从左到右画出来，起点是主题暖色、末端是禁用灰：
+ * 一条线同时交代"划掉"和"由亮转暗"。
+ * 这是 .preview 里三条脚本按 getComputedStyle(el,'::after').transform 读的那一层，
+ * 不能换成 text-decoration —— 那样就没有可插值的 scaleX(0→1) 了。
+ */
+.m-task-label::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1.5px;
+  background: linear-gradient(90deg, var(--event) 0%, var(--text-faint) 100%);
+  transform: scaleX(0);
+  transform-origin: left center;
+  pointer-events: none;
+  transition: transform var(--t-strike) var(--ease-alpha);
+}
+
+.m-task-text.m-task-done {
+  color: var(--text-faint);
+}
+
+.m-task-text.m-task-done .m-task-label::after {
+  transform: scaleX(1);
+}
+
+/* 重复规则 / 倒数日：安静的小字，不用药丸 */
+.m-task-tag {
+  flex: none;
+  font-size: var(--fs-caption);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+/* 倒数日没有勾选框，但文字要和别的行左边对齐 —— 占住和勾选圈一样大的一块 */
+.m-task-spacer {
+  flex: none;
+  width: 24px;
+  height: 24px;
+}
+
+.m-task-del {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  /* 负外边距把图标推到行的视觉边缘：图标自己已经够当触控区了 */
+  margin-right: calc(var(--s-3) * -1);
+  border-radius: var(--r-chip);
+  color: var(--text-faint);
+  transition: background-color var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out);
+}
+
+.m-task-del svg {
+  width: 16px;
+  height: 16px;
+}
+
+.m-task-del:active {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+@media (hover: hover) {
+  .m-task-del:hover {
+    background: var(--danger-soft);
+    color: var(--danger);
+  }
+}
+
+.m-empty {
+  padding: var(--s-8) var(--m-gutter);
+  color: var(--text-faint);
+  font-size: var(--fs-label);
+  text-align: center;
+}
+
+/* ------------------------------ 左滑删除 ------------------------------ */
+/*
+ * 底下藏一枚圆形红底 X，行被手指推开才露出来。
+ * 不做整条红色矩形：那块面积太大，又和"选中"撞色。
+ *
+ * 进场只有透明度，没有位移：位移留给 .m-view 那一次。
+ * 一次切页只允许一个有位移的进场 —— 三层各飞一次的结果是三份 opacity 相乘，
+ * 前 150ms 屏幕是黑的，位移也叠成 20px。错峰由 JSX 的内联 animation-delay 给。
+ */
+.swipe-row {
+  position: relative;
+  overflow: hidden;
+  /* backwards 而不是 both：both 会把 transform 永久钉住，
+     行里任何 :active 位移和高度塌陷都会被它盖掉 */
+  animation: enter-fade var(--m-t-enter) var(--ease-alpha) backwards;
+}
+
+.swipe-row + .swipe-row {
+  box-shadow: inset 0 1px 0 var(--hairline);
+}
+
+/* 内容层必须不透明：底下就是那枚红色圆钮，透了会一直看见它 */
+.swipe-content {
+  position: relative;
+  background: var(--surface);
+  touch-action: pan-y;
+  will-change: transform;
+}
+
+.swipe-del {
+  position: absolute;
+  top: 50%;
+  right: var(--s-5);
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin-top: -17px;
+  border-radius: 50%;
+  background: var(--danger-soft);
+  color: var(--danger);
+  opacity: 0;
+  transform: scale(0.6);
+  transition: opacity var(--t-fast) var(--ease-out), transform var(--t-fast) var(--ease-out);
+}
+
+.swipe-row.is-open .swipe-del {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.swipe-del svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 2.2;
+}
+
+/* 滑出去之后整行淡掉，等外部把数据删掉 */
+.swipe-row.is-leaving .swipe-content,
+.swipe-row.is-leaving .swipe-del {
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--ease-out);
+}
+
+/* ------------------------------ 重复规则芯片 ------------------------------ */
+/*
+ * 这个组件桌面与手机共用（RepeatChip.tsx），两边样式表都要有它的规则。
+ * 差异只在尺寸：手机上它是弹层里"输入框右边那个键"，跟输入框一样高（44px）。
+ */
+.m-sheet-add-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+}
+
+.m-sheet-add-row .m-sheet-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.repeat-chip-box {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.repeat-chip {
+  height: var(--m-tap);
+  padding: 0 var(--s-5);
+  border-radius: var(--r-control);
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  color: var(--text-dim);
+  font-size: var(--fs-label);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  transition:
+    background-color var(--t-fast) var(--ease-out),
+    box-shadow var(--t-fast) var(--ease-out),
+    color var(--t-fast) var(--ease-out);
+}
+
+.repeat-chip.is-open {
+  box-shadow: inset 0 0 0 1px var(--hairline-strong);
+  color: var(--text);
+}
+
+/* 有重复规则才上色；默认"不重复"保持安静 */
+.repeat-chip.is-on {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+/* 菜单是 portal 到 body 上的（fixed 和 z-index 由 inline 给），这里只管长相 */
+.repeat-menu {
+  position: absolute;
+  z-index: 40;
+  min-width: 176px;
+  padding: var(--s-3);
+  border-radius: var(--r-card);
+  background: var(--panel);
+  box-shadow: inset 0 1px 0 var(--rim-inset), inset 0 0 0 1px var(--hairline), var(--e3);
+  /* 从按钮那一角长出来（transform-origin 由 JS 按上下空间给） */
+  animation: pop-in var(--m-t-pop) var(--m-ease-pop-out) backwards;
+}
+
+/* 每一项再错开 24ms 浮上来：延迟由 JSX 的内联 animation-delay 给 */
+.repeat-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  width: 100%;
+  height: 38px;
+  padding: 0 var(--s-3);
+  border-radius: var(--r-chip);
+  color: var(--text-dim);
+  font-size: var(--fs-label);
+  text-align: left;
+  animation: enter-fade var(--t-fast) var(--ease-alpha) backwards;
+  transition: background-color var(--t-fast) var(--ease-out);
+}
+
+.repeat-item:active {
+  background: var(--bg-elev-2);
+}
+
+/* 「每 N 天」这一行：左边是可点的名字，右边是数字输入框 */
+.repeat-item.is-custom {
+  padding: 0 var(--s-2) 0 var(--s-3);
+}
+
+.repeat-custom-go {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  text-align: left;
+  color: inherit;
+  font-size: inherit;
+}
+
+.repeat-days {
+  width: 48px;
+  height: 24px;
+  margin-left: auto;
+  padding: 0 var(--s-3);
+  border-radius: var(--r-chip);
+  background: var(--surface-3);
+  box-shadow: inset 0 0 0 1px var(--hairline-strong);
+  color: var(--text);
+  font-size: var(--fs-caption);
+  text-align: center;
+}
+
+/* ------------------------------ 列表页（即将 / 设置） ------------------------------ */
+/*
+ * 列表只有一种行（.m-group-item），永远躺在 .m-card 里：
+ * 卡片负责纸面和圆角，行负责分隔线和触控区。行的边框/圆角一律不要，
+ * 否则每一行都会变成一张独立小卡 —— 旧版最重的一层重复。
+ */
+.m-list {
+  padding: var(--s-4) var(--m-gutter) var(--s-8);
+}
+
+/* 设置页底部要空出悬浮底栏的高度，否则最后一块（关于）会被压在栏下面 */
+.m-list-settings {
+  padding-bottom: calc(var(--s-8) + 96px + var(--m-safe-b));
+}
+
+.m-group {
+  margin-bottom: var(--s-7);
+}
+
+.m-group-date {
+  padding: 0 var(--s-2) var(--s-3);
+  font-size: var(--fs-label);
+  font-weight: var(--fw-semi);
+  color: var(--text-faint);
+}
+
+.m-group-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-5);
+  width: 100%;
+  min-height: var(--m-tap);
+  padding: var(--s-4);
+  text-align: left;
+  background: transparent;
+  animation: enter-fade var(--m-t-enter) var(--ease-alpha) backwards;
+  transition: background-color var(--t-fast) var(--ease-out);
+}
+
+.m-group-item + .m-group-item {
+  box-shadow: inset 0 1px 0 var(--hairline);
+}
+
+.m-group-item:active {
+  background: var(--surface-2);
+}
+
+/* 日程左侧那道竖线：颜色由 JSX 按日历色写进 inline style */
+.m-event-bar {
+  flex: none;
+  align-self: stretch;
+  width: 3px;
+  min-height: 24px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+}
+
+.m-group-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.m-group-title {
+  font-size: var(--fs-body);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.m-group-sub {
+  font-size: var(--fs-caption);
+  color: var(--text-faint);
+}
+
+.m-group-done {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.m-group-done svg {
+  width: 11px;
+  height: 11px;
+  stroke-width: 2.4;
+}
+
+/* ------------------------------ 输入框（设置 / 弹层 / 登录共用） ------------------------------ */
+/*
+ * 三个界面的输入框是同一件东西：底、边、圆角、聚焦环只写一次，
+ * 各自只声明尺寸。分开写的结果是三处慢慢长得不一样。
+ */
+.m-set-input,
+.m-sheet-input,
+.m-setup-input {
+  width: 100%;
+  padding: 0 var(--s-5);
+  border-radius: var(--r-control);
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  color: var(--text);
+  transition:
+    background-color var(--t-fast) var(--ease-out),
+    box-shadow var(--t-fast) var(--ease-out);
+}
+
+.m-set-input::placeholder,
+.m-sheet-input::placeholder,
+.m-setup-input::placeholder {
+  color: var(--text-faint);
+}
+
+/* 聚焦：一圈强调色 + 一圈淡淡的晕，不用外投影（外投影会把行距推歪） */
+.m-set-input:focus,
+.m-sheet-input:focus,
+.m-setup-input:focus {
+  box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px var(--accent-soft);
+}
+
+.m-set-input {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  font-size: var(--fs-label);
+}
+
+.m-sheet-input {
+  height: 48px;
+  font-size: var(--m-fs-input);
+}
+
+.m-setup-input {
+  height: 48px;
+  margin-bottom: var(--s-5);
+  font-size: var(--m-fs-input);
+}
+
+/* ------------------------------ 设置里的小控件 ------------------------------ */
+
+/* 输入框 + 按钮同一行；紧跟在行后面时补一道分隔线 */
+.m-set-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  padding: var(--s-3) var(--s-4);
+}
+
+.m-group-item + .m-set-row {
+  box-shadow: inset 0 1px 0 var(--hairline);
+}
+
+/* 只有一颗文字按钮的一行（服务器分组里的「恢复默认」）：靠右，贴着上一行 */
+.m-set-row-end {
+  justify-content: flex-end;
+  padding-top: 0;
+}
+
+/* 次要操作：安静的描边小胶囊 */
+.m-side-btn {
+  flex: none;
+  height: 32px;
+  padding: 0 var(--s-5);
+  border-radius: var(--r-pill);
+  box-shadow: inset 0 0 0 1px var(--hairline-strong);
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-semi);
+  transition: background-color var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out);
+}
+
+.m-side-btn:active {
+  background: var(--bg-elev-2);
+  color: var(--text);
+}
+
+/*
+ * 文字型次要动作（设置页的「恢复默认」）。
+ * 比描边胶囊「保存」再弱一档：没有边、没有底，按下去才亮成强调色。
+ */
+.m-set-link {
+  height: 32px;
+  padding: 0 var(--s-4);
+  border-radius: var(--r-chip);
+  color: var(--text-faint);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-semi);
+  transition: color var(--t-fast) var(--ease-out);
+}
+
+.m-set-link:active {
+  color: var(--accent-text);
+}
+
+/* 同一套样式也用在 <a> 上（「关于」里的开源仓库入口）：补齐 flex 居中与去下划线 */
+a.m-set-link {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.m-side-btn:disabled {
+  opacity: 0.45;
+}
+
+.m-side-btn.danger {
+  color: var(--danger);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 50%, transparent);
+}
+
+/* 行内小图标按钮（删日历）：平时灰叉，按下变红叉 */
+.m-icon-mini {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-chip);
+  color: var(--text-faint);
+  transition: background-color var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out);
+}
+
+.m-icon-mini svg {
+  width: 16px;
+  height: 16px;
+}
+
+.m-icon-mini:disabled {
+  opacity: 0.3;
+}
+
+.m-icon-mini:active {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+@media (hover: hover) {
+  .m-icon-mini:hover:not(:disabled) {
+    background: var(--danger-soft);
+    color: var(--danger);
+  }
+}
+
+.m-confirm-row {
+  flex: none;
+  display: flex;
+  gap: var(--s-3);
+}
+
+/*
+ * 删视图的二次确认。
+ *
+ * 删除视图现在是级联软删：这个视图下的事件和便签会一起没掉。
+ * 一句话提醒必须摆在按钮上方，不然用户以为只是"把这个分类去掉"。
+ */
+.m-confirm-cell {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--s-3);
+}
+
+.m-confirm-hint {
+  font-size: var(--fs-micro);
+  line-height: var(--lh-micro);
+  color: var(--text-faint);
+  text-align: right;
+}
+
+/* 这一行里的按钮要跟着列表行收紧，不能撑成弹层里那种 46px 大方块 */
+.m-confirm-row .m-btn {
+  flex: none;
+  height: 32px;
+  padding: 0 var(--s-5);
+  border-radius: var(--r-chip);
+  font-size: var(--fs-label);
+}
+
+/* ------------------------------ 按钮 ------------------------------ */
+
+.m-btn {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  height: 46px;
+  border-radius: var(--r-control);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: var(--fs-body);
+  font-weight: var(--fw-semi);
+  transition:
+    background-color var(--t-fast) var(--ease-out),
+    color var(--t-fast) var(--ease-out),
+    transform var(--t-press) var(--ease-press);
+}
+
+.m-btn:active {
+  transform: scale(0.985);
+}
+
+/* 强调色按钮：一层白色渐变把面抬起来，不是纯色块贴上去 */
+.m-btn.m-btn-primary {
+  background:
+    var(--mat-grad) padding-box,
+    linear-gradient(var(--accent), var(--accent)) padding-box;
+  box-shadow: inset 0 1px 0 var(--rim-inset), inset 0 -1px 0 var(--rim-lo);
+  color: var(--accent-ink);
+}
+
+/*
+ * 危险操作按钮：给「删除视图」用 —— 那是真正会丢数据的动作
+ * （Worker 会把这个视图下的事件和便签一起软删），和普通「取消」必须一眼分开。
+ */
+.m-btn.m-btn-danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.m-btn:disabled,
+.m-side-btn:disabled {
+  opacity: 0.45;
+}
+
+/* ------------------------------ 液态玻璃底栏 ------------------------------ */
+/*
+ * 底栏是整屏唯一"内容会从底下过去"的固定层，也是玻璃最该出现的地方：
+ * 染色 + 镜面边 + 抬升 + 真模糊，参数和桌面端的侧栏 / 面板同一套。
+ * 透镜（lens）的位置、宽高、抬起量由 GlassDock.tsx 的 rAF 弹簧逐帧写进 inline，
+ * 所以这里不写 transition —— 缓动在物理里，不在 CSS 里。
+ */
+.m-dock-wrap {
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 60;
+  padding: 0 calc(var(--m-safe-r) + var(--s-5)) calc(var(--m-safe-b) + var(--s-5))
+    calc(var(--m-safe-l) + var(--s-5));
+  pointer-events: none;
+  /* 只动 transform，不动 opacity：这条栏里有带 backdrop-filter 的元素，
+     祖先一旦有了 opacity < 1，玻璃在整段动画里都是死的 */
+  transition: transform var(--t-base) var(--ease-emphasized);
+}
+
+/* 弹层打开时整条沉下去，别压在键盘和输入框上 */
+.m-dock-wrap.is-hidden {
+  transform: translate3d(0, calc(100% + var(--s-9)), 0);
+}
+
+.m-dock {
+  display: flex;
+  align-items: center;
+  gap: var(--s-5);
+  max-width: 536px;
+  margin: 0 auto;
+  pointer-events: auto;
+}
+
+.m-dock-glass {
+  position: relative;
+  flex: 3;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  height: var(--m-dock-h);
+  overflow: hidden;
+  isolation: isolate;
+  border-radius: var(--r-panel);
+  --elev: var(--e2);
+  background:
+    var(--mat-grad) padding-box,
+    linear-gradient(var(--mat-veil), var(--mat-veil)) padding-box;
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  /* 横向拖动是底栏自己的手势：交给浏览器去抢会变成 pointercancel */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  transition: transform var(--t-press) var(--ease-press);
+}
+
+/* 按住时整条玻璃轻轻收一下，和药丸一起给出按压反馈 */
+.m-dock-glass.is-pressed {
+  transform: scale(0.992);
+}
+
+.m-dock-lens {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  z-index: 0;
+  width: 0;
+  height: 0;
+  border-radius: var(--r-card);
+  background: var(--mat-grad) padding-box, var(--accent-soft) padding-box;
+  box-shadow:
+    inset 0 1px 0 var(--rim-inset),
+    inset 0 -1px 0 var(--rim-lo),
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 26%, transparent),
+    var(--e2);
+  pointer-events: none;
+  will-change: transform, width, height;
+}
+
+/* 透镜里的折射高光：只做顶部一段，越往下越透明 */
+.m-dock-lens-glow {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(180deg, var(--rim-hi) 0%, transparent 46%);
+  box-shadow: inset 0 0 0 1px var(--rim-mid);
+  pointer-events: none;
+}
+
+.m-dock-item {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-1);
+  color: var(--text-faint);
+  /* 上色是瞬时的：颜色渐变的 200ms 里药丸还在路上，看起来像两个东西各动各的 */
+}
+
+.m-dock-item.m-dock-item-on {
+  color: var(--accent);
+}
+
+.m-dock-icon {
+  display: grid;
+  place-items: center;
+  height: 22px;
+  /* 放大由 JS 按"离透镜中心的距离"逐帧写 transform，这里不给固定 scale */
+  will-change: transform;
+}
+
+.m-dock-icon svg {
+  width: 21px;
+  height: 21px;
+}
+
+.m-dock-label {
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semi);
+  line-height: 1;
+}
+
+/* 右侧圆形加号：和底栏同高，不抢戏但一眼能找到 */
+.m-dock-add {
+  flex: 1;
+  display: grid;
+  place-items: center;
+}
+
+/*
+ * FAB 是强调色的玻璃：底是 accent（略半透明）+ 同一套镜面边。
+ * 它和底栏玻璃必须"同一种材料、不同染色"，否则一个像塑料一个像纸。
+ */
+.m-fab {
+  display: grid;
+  place-items: center;
+  width: var(--m-dock-h);
+  height: var(--m-dock-h);
+  border-radius: 50%;
+  --elev: var(--e2);
+  background:
+    var(--mat-grad) padding-box,
+    color-mix(in srgb, var(--accent) 86%, transparent) padding-box;
+  color: var(--accent-ink);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  transition: transform var(--t-press) var(--ease-press);
+}
+
+/* 按下是"鼓起来"：大控件用放大，小控件才用缩小 */
+.m-fab:active {
+  transform: scale(1.04);
+}
+
+.m-fab svg {
+  width: 23px;
+  height: 23px;
+  stroke-width: 2;
+}
+
+/* ------------------------------ 底部弹层 ------------------------------ */
+/*
+ * 加待办的底部弹层：chrome，但不是"玻璃"——它下面没有会滚过去的内容
+ * （内容已经被 .m-body 的 filter 糊掉了），所以只做染色 + 镜面边 + 抬升。
+ * 从屏幕外顶上来不给回弹：--m-ease-sheet 是只减速的贝塞尔。
+ */
+.m-sheet {
+  position: fixed;
+  inset: auto 0 0 0;
+  max-width: 560px;
+  margin: 0 auto;
+  padding: var(--s-2) calc(var(--m-safe-r) + var(--m-gutter))
+    calc(var(--m-safe-b) + var(--s-6)) calc(var(--m-safe-l) + var(--m-gutter));
+  border-radius: var(--r-panel) var(--r-panel) 0 0;
+  --elev: var(--e3);
+  background:
+    var(--mat-grad) padding-box,
+    linear-gradient(var(--mat-veil), var(--mat-veil)) padding-box;
+  transform: translate3d(0, 100%, 0);
+  visibility: hidden;
+  will-change: transform;
+  transition: transform var(--t-sheet) var(--m-ease-sheet), visibility 0s linear var(--t-sheet);
+}
+
+.m-sheet {
+  z-index: 51;
+}
+
+.m-sheet.is-open {
+  transform: none;
+  visibility: visible;
+  transition-delay: 0s;
+}
+
+/* ------------------------- 二次确认（居中对话框） ------------------------- */
+/*
+ * 和桌面端那张是同一个东西：居中的一张纸，不是从底下顶上来的抽屉。
+ *
+ * 之前它和 .m-sheet 共用一套"贴底 + 上滑"的规则，看起来像另一个交互；
+ * 现在独立成一份：居中、四周都留边、圆角四角、缩放淡入。
+ * 材料同样不用 backdrop-filter（背后已经是糊掉的内容，再加一层只是白付钱）。
+ */
+.m-confirm {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  z-index: 71;
+  width: min(340px, calc(100vw - var(--m-gutter) * 2 - var(--m-safe-l) - var(--m-safe-r)));
+  padding: var(--s-6);
+  border-radius: var(--r-panel);
+  background: var(--panel);
+  box-shadow:
+    inset 0 1px 0 var(--rim-inset),
+    inset 0 0 0 1px var(--hairline),
+    var(--e3);
+  transform: translate3d(-50%, -50%, 0) scale(0.94);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform var(--t-pop) var(--ease-pop),
+    opacity var(--t-fast) var(--ease-alpha);
+}
+
+.m-confirm.is-open {
+  transform: translate3d(-50%, -50%, 0) scale(1);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* 桌面那张没有抓手，手机上也不给：它是对话框，不是可拖的抽屉 */
+.m-confirm-handle {
+  display: none;
+}
+
+/* 顶部那道抓手：告诉用户"这块可以往下推" */
+.m-sheet-handle,
+.m-confirm-handle {
+  width: 36px;
+  height: 4px;
+  margin: var(--s-2) auto var(--s-5);
+  border-radius: var(--r-pill);
+  background: var(--hairline-strong);
+}
+
+.m-sheet-title,
+.m-confirm-title {
+  margin-bottom: var(--s-3);
+  font-size: var(--fs-title);
+  line-height: var(--lh-title);
+  font-weight: var(--fw-semi);
+}
+
+.m-sheet-actions {
+  display: flex;
+  gap: var(--s-4);
+  margin-top: var(--s-5);
+}
+
+.m-confirm-text {
+  margin-bottom: var(--s-6);
+  color: var(--text-dim);
+  font-size: var(--fs-label);
+  line-height: var(--lh-label);
+}
+
+.m-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--s-3);
+}
+
+/*
+ * 按钮排成一行、靠右（和桌面端那张完全一致）。
+ * 必须显式盖掉 .m-btn 的 flex: 1：父容器是 row + wrap，
+ * 不盖掉的话三个按钮会把宽度均分，短标签被撑成一个大方块。
+ */
+.m-confirm-actions .m-btn {
+  flex: none;
+  height: 38px;
+  padding: 0 var(--s-4);
+  font-size: var(--fs-label);
+}
+
+/* 居中对话框要压暗一层才像"模态"：桌面那张背后也是压暗的，这里对齐 */
+.m-confirm-mask.is-open {
+  background: var(--scrim);
+}
+
+/* ------------------------------ 提示 ------------------------------ */
+/*
+ * 提示条是 chrome 里最靠前的一层：不透明面板 + 一圈亮边 + 抬升，
+ * 落在底栏上方（避开安全区和底栏），2.2 秒后由 JS 摘掉 is-open。
+ */
+.m-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--m-safe-b) + var(--m-dock-h) + var(--s-7));
+  z-index: 60;
+  padding: var(--s-3) var(--s-6);
+  border-radius: var(--r-pill);
+  background: var(--panel);
+  box-shadow: inset 0 0 0 1px var(--hairline-strong), var(--e2);
+  color: var(--text);
+  font-size: var(--fs-label);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate3d(-50%, var(--s-5), 0) scale(0.96);
+  transition: opacity var(--t-fast) var(--ease-alpha), transform var(--t-pop) var(--ease-pop);
+}
+
+.m-toast.is-open {
+  opacity: 1;
+  transform: translate3d(-50%, 0, 0) scale(1);
+}
+
+/* ------------------------------ 配对 / 登录页 ------------------------------ */
+/*
+ * 登录页在 .m-shell 之外（还没配对，没有外壳），所以安全区四边都要自己让；
+ * 高度用 dvh：安卓上地址栏收起 / 展开时 100% 会把按钮顶出屏幕。
+ */
+.m-setup {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+  max-width: 460px;
+  margin: 0 auto;
+  padding: calc(var(--m-safe-t) + var(--s-9)) calc(var(--m-safe-r) + var(--s-7))
+    calc(var(--m-safe-b) + var(--s-8)) calc(var(--m-safe-l) + var(--s-7));
+}
+
+.m-setup-mark {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  margin-bottom: var(--s-6);
+  color: var(--accent);
+}
+
+/*
+ * 标题下面没有小字了（那句"同一个账号在电脑和手机上读写同一份日历"已删），
+ * 所以 h1 自己把间距给足：原来那 46px 是"h1 下边距 + 一行小字 + 它的下边距"，
+ * 少了一行小字就得让 h1 直接接到「登录 / 注册」分段控件上，而不是留一个空洞。
+ */
+.m-setup h1 {
+  margin: 0 0 var(--s-6);
+  font-size: var(--fs-display);
+  line-height: var(--lh-display);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-display);
+}
+
+/* 这里没有统一的 p 样式：说明性小字都删了，剩下的三条各自声明自己的间距 */
+.m-setup-label {
+  display: block;
+  margin: 0 0 var(--s-3);
+  color: var(--text-faint);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-semi);
+}
+
+.m-setup-btn {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 50px;
+  margin-bottom: var(--s-4);
+  border-radius: var(--r-card);
+  background:
+    var(--mat-grad) padding-box,
+    linear-gradient(var(--accent), var(--accent)) padding-box;
+  box-shadow: inset 0 1px 0 var(--rim-inset), inset 0 -1px 0 var(--rim-lo);
+  color: var(--accent-ink);
+  font-size: var(--m-fs-input);
+  font-weight: var(--fw-bold);
+  transition: transform var(--t-press) var(--ease-press), filter var(--t-fast) var(--ease-out);
+}
+
+.m-setup-btn:active {
+  transform: scale(0.99);
+  filter: brightness(1.06);
+}
+
+.m-setup-btn:disabled {
+  opacity: 0.5;
+}
+
+.m-setup-hint {
+  margin: var(--s-3) 0 var(--s-5);
+  color: var(--text-faint);
+  font-size: var(--fs-caption);
+  text-align: center;
+}
+
+/* 注册页的密码规则：贴在「生成强密码」下面，太短时换成警告色 */
+.m-setup-rule {
+  margin: calc(var(--s-2) * -1) 0 var(--s-5);
+  color: var(--text-faint);
+  font-size: var(--fs-caption);
+}
+
+.m-setup-rule.is-warn {
+  color: var(--danger);
+}
+
+.m-setup-error {
+  margin: 0 0 var(--s-5);
+  color: var(--danger);
+  font-size: var(--fs-label);
+}
+
+/* 登录 / 注册两档切换：分段控件，选中项抬起一格 */
+.m-auth-tabs {
+  display: flex;
+  gap: var(--s-2);
+  padding: var(--s-1);
+  margin-bottom: var(--s-5);
+  border-radius: var(--r-control);
+  background: var(--bg-elev);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+.m-auth-tab {
+  flex: 1;
+  height: 36px;
+  border-radius: var(--r-chip);
+  color: var(--text-faint);
+  font-size: var(--fs-label);
+  font-weight: var(--fw-semi);
+  transition: background-color var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out);
+}
+
+.m-auth-tab.on {
+  background: var(--surface);
+  box-shadow: inset 0 1px 0 var(--rim-inset), inset 0 0 0 1px var(--hairline), var(--e1);
+  color: var(--text);
+}
+
+.m-auth-link {
+  align-self: flex-start;
+  margin: calc(var(--s-1) * -1) 0 var(--s-4);
+  padding: var(--s-1) 0;
+  color: var(--accent-text);
+  font-size: var(--fs-caption);
+}
+
+/*
+ * 登录页「密码 / 服务器」之间那一行次级动作（恢复默认服务器 / 生成强密码）。
+ *
+ * 整行宽度和下面那颗主按钮一致，按钮各占一半（flex: 1 1 0 —— 不能一边宽一边窄）；
+ * 视觉和 .m-auth-link 同一族但做成"安静的描边胶囊"：不填色、40px（主按钮 50px），
+ * 一眼能按、又不跟主操作抢位置。
+ * 登录态只剩左边一颗，此时它半宽、靠左，和注册态同一个对齐位置，切标签不跳。
+ */
+.m-auth-row {
+  display: flex;
+  gap: var(--s-4);
+  margin: 0 0 var(--s-5);
+}
+
+.m-auth-row .m-auth-link {
+  flex: 1 1 0;
+  min-width: 0;
+  align-self: stretch;
+  height: 40px;
+  margin: 0;
+  padding: 0 var(--s-4);
+  border-radius: var(--r-control);
+  box-shadow: inset 0 0 0 1px var(--hairline-strong);
+  color: var(--text-dim);
+  font-size: var(--fs-label);
+  font-weight: var(--fw-semi);
+  transition: background-color var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out);
+}
+
+.m-auth-row .m-auth-link:active {
+  background: var(--bg-elev-2);
+  color: var(--text);
+}
+
+/*
+ * 登录态只剩「恢复默认服务器」一颗：占半宽、靠左，和注册态第一颗一样大。
+ * 铺满整行会变成一条 350px 的空描边条，比主按钮还抢眼，切标签时按钮宽度也会跳。
+ */
+.m-auth-row .m-auth-link:only-child {
+  flex: 0 0 calc((100% - var(--s-4)) / 2);
+}
+
+/* ------------------------------ 切页 ------------------------------ */
+/*
+ * 一次切页只允许一次带位移的进场（4px 上浮），方向由 is-next / is-prev 给：
+ * 底栏从左到右就是页面的先后，往右的标签从右边来，读起来才顺。
+ * 卡片不进场、行只做透明度 —— 容器和子元素同时淡入就是两级透明度相乘，
+ * 那是"切页头 150ms 发黑"的真正原因。首次渲染不加动画（.no-anim）：
+ * 首帧已经是真界面，再淡入一次等于把内容往后推。
+ */
+.m-view {
+  --enter-y: var(--s-2);
+  animation: enter-up var(--m-t-page) var(--ease-out) backwards;
+}
+
+.m-view.is-next {
+  --enter-x: var(--s-5);
+  --dir: 1;
+  animation-name: enter-x;
+}
+
+.m-view.is-prev {
+  --enter-x: var(--s-5);
+  --dir: -1;
+  animation-name: enter-x;
+}
+
+.m-view.no-anim {
+  animation: none;
+}
+
+/* ------------------------------ 按压反馈统一 ------------------------------ */
+/*
+ * 所有"按下去会动一下"的控件走同一条 press 弹簧（按 240ms 采样，参数见 tokens.css）。
+ * 只覆盖 :active 期间的 transition：松开回到各控件自己的快速过渡，
+ * 按下去有弹性、松手立刻跟手。
+ * 时长必须配 --t-press：--ease-press 是按 240ms 采样的，配 200ms 会把曲线拉长，
+ * 回弹变成"慢半拍"。
+ */
+.m-fab:active,
+.m-task-check:active,
+.m-btn:active,
+.m-side-btn:active,
+.m-icon-mini:active,
+.m-today-btn:active,
+.m-group-item:active,
+.m-grid-cell:active .m-grid-num {
+  transition: transform var(--t-press) var(--ease-press);
+}
+
+/* ------------------------------ 材质降级档 ------------------------------ */
+/*
+ * 三档材质由 design/platform.ts 写进 <html data-mat> / <html data-glass>：
+ *   plain  —— 去掉 backdrop-filter，把染色加重补回可读性（安卓 WebView 默认）
+ *   opaque —— 用户开了"减弱透明"：全部换不透明底，布局零位移
+ * 注意：手机入口目前没有调用 applyMaterials()，所以这两档在真机上暂时打不开。
+ * 下面那条 prefers-reduced-transparency 是同一条意图的系统级兜底，不依赖 JS。
+ */
+:root[data-mat='plain'] .m-top,
+:root[data-mat='plain'] .m-menu,
+:root[data-mat='plain'] .m-dock-glass,
+:root[data-mat='plain'] .m-fab {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  --mat-veil: color-mix(in srgb, var(--bg-base) 78%, transparent);
+}
+
+:root[data-glass='opaque'] .m-top,
+:root[data-glass='opaque'] .m-menu,
+:root[data-glass='opaque'] .m-sheet,
+:root[data-glass='opaque'] .m-confirm,
+:root[data-glass='opaque'] .m-dock-glass {
+  background: var(--panel);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: inset 0 0 0 1px var(--hairline-strong), var(--e1);
+}
+
+/* FAB 不能跟着变面板色：它是整屏唯一的强调色动作，换成 --panel 就没了 */
+:root[data-glass='opaque'] .m-fab {
+  background: var(--accent);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: var(--e1);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .m-top,
+  .m-menu,
+  .m-dock-glass,
+  .m-fab {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    --mat-veil: color-mix(in srgb, var(--bg-base) 78%, transparent);
+  }
+
+  .m-sheet,
+  .m-confirm {
+    background: var(--panel);
+  }
+}

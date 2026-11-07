@@ -1,0 +1,24 @@
+name = "caldesk"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+# 部署：Cloudflare Workers Builds 直接从 GitHub 拉本仓库，根目录设为 worker/，
+# 构建命令 `npm ci`，部署命令 `npx wrangler deploy`。推代码即部署。
+[[d1_databases]]
+binding = "DB"
+database_name = "caldesk"
+# 这是 D1 资源的 UUID，不是密钥（密钥在 Cloudflare 控制台的变量和密钥里）。
+# 自己部署时换成你自己的：`npx wrangler d1 create caldesk` 会打印出来。
+database_id = "<your-d1-database-id>"
+
+# 建表不需要手工执行 SQL：Worker 首次请求时会跑 src/schema.ts 里的
+# CREATE TABLE IF NOT EXISTS（每个 isolate 一次）。
+
+# 鉴权分两层：
+# 1. 账号 = 用户名 + 密码（PBKDF2 加盐哈希，只在 accounts 表里留哈希和盐）
+# 2. 登录后每台设备一套凭据：Authorization: Bearer <deviceId>.<secretHex>，
+#    服务端只存 sha256(salt || secret)
+# 没有全局共享令牌，所以这里没有 SYNC_TOKEN。
+#
+# 注册对所有人开放（用户名 + 密码）。想限制谁能用，请在 Cloudflare 侧加
+# WAF 规则 / Access，而不是在 Worker 代码里塞邀请码。

@@ -1,0 +1,187 @@
+﻿/**
+ * 材质层 —— 「液态玻璃」在本项目里的可落地版本。
+ *
+ * 先说清楚一件事：本项目没有内容从 chrome 底下穿过（标题栏是 flex 行、侧栏是列），
+ * 所以桌面上的玻璃是**染色玻璃**（半透明 + 顶部高光边 + 底部暗边 + 颗粒），
+ * 不是"透过去看得见文字"的玻璃。真正压在滚动内容上的只有手机 dock、顶栏、
+ * FAB、详情面板的底部输入条和顶部 header —— blur 只给这几处。
+ *
+ * 统一光源假设：上方偏左 25° 的远方向光。由此推出三条硬规则：
+ *   · 顶边永远最亮（inset 0 1px 0 亮边）
+ *   · 只有底边是暗边（inset 0 -1px 0 暗边）
+ *   · 阴影永远向下偏，宽而淡，不能是黑影
+ *
+ * 深色主题的关键（灰盒的成因）：
+ *   1. 底色用偏蓝的墨 rgba(18,20,26,.52)，不是纯黑 —— 纯黑半透明会比页面更暗
+ *   2. 亮度是"加"上来的：--mat-grad 里的白色渐变负责把面抬 6~12 L*
+ *   3. saturate(180%) 是模糊补偿，不是风格旋钮（高斯模糊会把彩色推向中灰）
+ *   4. 暗角锚在顶部中央，不是中心 —— 锚中心会变成聚光灯
+ */
+
+/* ------------------------------------------------------------ 环境层 */
+/*
+ * 玻璃背后必须有东西可透。纯色背景上的玻璃永远是灰盒子，
+ * 所以整窗先铺一层低振幅的柔光渐变 + 颗粒，这也顺带解决了 8bit 渐变的色阶断裂。
+ */
+.mat-ambient {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(58% 42% at 16% -4%, var(--ambient-a), transparent 72%),
+    radial-gradient(52% 38% at 94% 8%, var(--ambient-b), transparent 72%),
+    radial-gradient(78% 58% at 52% 104%, var(--ambient-c), transparent 72%),
+    var(--bg-base);
+}
+
+/* 颗粒：只铺一层（不是每个面各铺一层），1.2 CSS px 的胶片颗粒 */
+.mat-ambient::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  opacity: var(--grain-opacity);
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='128' height='128'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='128' height='128' filter='url(%23n)'/></svg>");
+  background-size: 128px 128px;
+}
+
+/* ------------------------------------------------ 不透明面（内容层） */
+/*
+ * 内容层不用玻璃。Apple 的规则是明确的：玻璃只做控件与导航，
+ * 内容层用普通材质，否则层级会崩。
+ */
+.mat-surface {
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+.mat-surface-raised {
+  background: var(--surface-2);
+  box-shadow:
+    inset 0 1px 0 var(--rim-inset),
+    inset 0 0 0 1px var(--hairline),
+    var(--e2);
+}
+
+/* ---------------------------------------------- 染色玻璃（chrome 层） */
+/*
+ * 三层合成：白色渐变（体感：上亮下暗）+ 半透明墨（染色）+ 内阴影堆。
+ * 用内阴影而不是 border-image / mask-composite 做镜面边：
+ *   · 不占用 ::before / ::after（组件自己的高光、删除线还要用）
+ *   · 圆角天然正确，没有亚像素偏差
+ *   · 兼容性到极老的 WebView
+ */
+.mat-chrome {
+  position: relative;
+  background:
+    var(--mat-grad) padding-box,
+    linear-gradient(var(--mat-veil), var(--mat-veil)) padding-box;
+  box-shadow:
+    inset 0 1px 0 var(--rim-inset),
+    inset 0 -1px 0 var(--rim-lo),
+    inset 0 0 0 1px var(--hairline),
+    var(--e2);
+}
+
+/* 只有外描边、没有抬起的"平贴玻璃"：侧栏、面板这种大面积用 */
+.mat-chrome-flat {
+  position: relative;
+  background:
+    var(--mat-grad) padding-box,
+    linear-gradient(var(--mat-veil), var(--mat-veil)) padding-box;
+  box-shadow:
+    inset 0 1px 0 var(--rim-inset),
+    inset 0 0 0 1px var(--hairline);
+}
+
+/* ------------------------------------------------------ 真模糊的玻璃 */
+/*
+ * 只给"内容会从后面过去"的地方。
+ * 绝不能 transition backdrop-filter（不插值，结束才跳）；
+ * 也绝不能给它的祖先加 opacity / filter / mask / clip-path 的动画
+ * （那会让元素变成 backdrop root，玻璃在动画期间彻底失效）。
+ */
+.mat-glass {
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+}
+
+/* -------------------------------------------------------- 遮罩 / 弹层 */
+/*
+ * 遮罩不压到黑：背后内容逐渐模糊 + 35% 压暗（Apple clear 变体给的数字）。
+ * 模糊作用在内容层（filter），不是遮罩自己（backdrop-filter）——
+ * 后者在 Chromium/WebView 里只改计算值、不逐帧重绘，看起来是"啪一下糊死"。
+ */
+.mat-scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--scrim-dim);
+}
+
+/* ---------------------------------------------------------- 滚动边缘 */
+/*
+ * iOS 的 scroll edge effect：内容滚到 chrome 底下时，用 mask 让边缘渐隐，
+ * 比再盖一层玻璃便宜得多，也是"peek through"的正确做法。
+ */
+.edge-top {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--edge-size, 16px));
+  mask-image: linear-gradient(to bottom, transparent 0, #000 var(--edge-size, 16px));
+}
+
+.edge-bottom {
+  -webkit-mask-image: linear-gradient(to top, transparent 0, #000 var(--edge-size, 16px));
+  mask-image: linear-gradient(to top, transparent 0, #000 var(--edge-size, 16px));
+}
+
+.edge-both {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--edge-size, 16px),
+    #000 calc(100% - var(--edge-size, 16px)),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--edge-size, 16px),
+    #000 calc(100% - var(--edge-size, 16px)),
+    transparent 100%
+  );
+}
+
+/* ------------------------------------------------------------ 降级档 */
+/*
+ * 三档材质，由启动时写入 <html data-mat> / <html data-glass>：
+ *   full    —— 全部材质（Electron）
+ *   plain   —— 去掉 backdrop-filter，只留 tint + 边框 + 阴影（安卓 WebView 默认）
+ *   opaque  —— 用户打开"减弱透明"：全部换不透明底，布局零位移
+ *
+ * 必须由平台判定，不能用 @supports —— 浏览器能解析 url() 然后静默忽略。
+ */
+:root[data-mat='plain'] .mat-glass {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* plain 档下把染色加重一点，补回失去的模糊带来的可读性 */
+:root[data-mat='plain'] .mat-chrome,
+:root[data-mat='plain'] .mat-chrome-flat {
+  --mat-veil: color-mix(in srgb, var(--bg-base) 78%, transparent);
+}
+
+:root[data-glass='opaque'] .mat-chrome,
+:root[data-glass='opaque'] .mat-chrome-flat,
+:root[data-glass='opaque'] .mat-glass {
+  background: var(--panel);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow:
+    inset 0 0 0 1px var(--hairline-strong),
+    var(--e1);
+}
+
+:root[data-glass='opaque'] .mat-ambient::after {
+  display: none;
+}
