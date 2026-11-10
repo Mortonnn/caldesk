@@ -1207,6 +1207,9 @@ async function gMini(c) {
     return
   }
   const vis = () => mini.eval(`document.visibilityState`)
+  // 新安装默认 1月；这组旧断言按单天浮窗写，先切回 1天再验
+  await mini.eval(`window.caldesk.settings.setMiniRange('day')`)
+  await sleep(800)
 
   // 1) 设置里关掉「桌面浮窗」→ 浮窗隐藏；再打开 → 又可见
   await c.click('[aria-label="设置"]')

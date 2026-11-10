@@ -8,6 +8,7 @@
  *   4. 桩 —— 显式报错，而不是白屏
  */
 import { decodeDeviceNameHeader, encodeDeviceNameHeader } from '@shared/identity'
+import { DEFAULT_MINI_HEIGHT, DEFAULT_MINI_WIDTH, type MiniRange, type MiniView } from '@shared/mini'
 import type {
   CalendarMeta,
   DayCell,
@@ -225,11 +226,19 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
         Promise.resolve({
           miniVisible: false,
           miniPinned: false,
+          // 手机 / 浏览器没有桌面浮窗：给一份和桌面默认一致的镜像值，
+          // 免得设置面板读到 undefined 把分段控件点成"全不选"
+          miniRange: 'month' as MiniRange,
+          miniView: 'list' as MiniView,
+          miniWidth: DEFAULT_MINI_WIDTH,
+          miniHeight: DEFAULT_MINI_HEIGHT,
           autoStart: false,
           closeToTray: false
         }),
       setAutoStart: () => Promise.resolve(false),
-      setCloseToTray: () => Promise.resolve(false)
+      setCloseToTray: () => Promise.resolve(false),
+      setMiniRange: (range: MiniRange) => Promise.resolve(range),
+      setMiniView: (view: MiniView) => Promise.resolve(view)
     },
 
     calendars: {
@@ -567,11 +576,15 @@ export function createHttpHost(cfg: HttpConfig): HostApi {
 
     app: { openMain: () => Promise.resolve() },
     onDataChanged: () => () => {},
+    onSettingsChanged: () => () => {},
     mini: {
       toggle: () => Promise.resolve(false),
       setVisible: () => Promise.resolve(false),
       hide: () => Promise.resolve(),
-      pin: () => Promise.resolve(false)
+      pin: () => Promise.resolve(false),
+      setSize: (width: number, height: number) => Promise.resolve({ width, height }),
+      resetSize: () =>
+        Promise.resolve({ width: DEFAULT_MINI_WIDTH, height: DEFAULT_MINI_HEIGHT })
     },
     mcp: {
       getInfo: () => Promise.resolve({ port: null, url: null })
@@ -602,11 +615,17 @@ function createStub(): HostApi {
         Promise.resolve({
           miniVisible: false,
           miniPinned: true,
+          miniRange: 'month' as MiniRange,
+          miniView: 'list' as MiniView,
+          miniWidth: DEFAULT_MINI_WIDTH,
+          miniHeight: DEFAULT_MINI_HEIGHT,
           autoStart: false,
           closeToTray: false
         }),
       setAutoStart: () => Promise.resolve(false),
-      setCloseToTray: () => Promise.resolve(false)
+      setCloseToTray: () => Promise.resolve(false),
+      setMiniRange: (range: MiniRange) => Promise.resolve(range),
+      setMiniView: (view: MiniView) => Promise.resolve(view)
     },
     calendars: {
       list: () => rejected<CalendarMeta[]>('视图列表'),
@@ -688,11 +707,15 @@ function createStub(): HostApi {
     },
     app: { openMain: fail('打开主窗口') },
     onDataChanged: () => () => {},
+    onSettingsChanged: () => () => {},
     mini: {
       toggle: () => Promise.resolve(false),
       setVisible: () => Promise.resolve(false),
       hide: () => Promise.resolve(),
-      pin: () => Promise.resolve(false)
+      pin: () => Promise.resolve(false),
+      setSize: (width: number, height: number) => Promise.resolve({ width, height }),
+      resetSize: () =>
+        Promise.resolve({ width: DEFAULT_MINI_WIDTH, height: DEFAULT_MINI_HEIGHT })
     },
     mcp: {
       getInfo: () => Promise.resolve({ port: null, url: null })

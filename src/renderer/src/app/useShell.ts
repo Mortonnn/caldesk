@@ -5,6 +5,7 @@
  * 以前和 52 个 state 挤在同一个组件里，任何一次 setState 都会重跑整棵树。
  */
 import { useCallback, useEffect, useLayoutEffect, useState } from 'react'
+import { DEFAULT_MINI_HEIGHT, DEFAULT_MINI_WIDTH, type MiniRange, type MiniView } from '@shared/mini'
 import { applyMaterials } from '../design/platform'
 import { getThemeMode, setThemeMode, type ThemeMode } from '../theme'
 import { data } from '../data'
@@ -25,7 +26,15 @@ export interface Shell {
   miniVisible: boolean
   autoStart: boolean
   closeToTray: boolean
+  /** 浮窗显示范围 / 实际尺寸：设置面板的分段高亮靠它们 */
+  miniRange: MiniRange
+  miniView: MiniView
+  miniWidth: number
+  miniHeight: number
   setMiniVisible: (v: boolean) => void
+  setMiniRange: (range: MiniRange) => void
+  setMiniView: (view: MiniView) => void
+  setMiniSize: (width: number, height: number) => void
   setAutoStart: (v: boolean) => void
   setCloseToTray: (v: boolean) => void
   /** 重新对齐主进程里的设置真值（打开设置面板时用） */
@@ -51,6 +60,11 @@ export function useShell(): Shell {
   const [autoStart, setAutoStart] = useState(true)
   /** 关闭主窗口时收进托盘（设置里可关） */
   const [closeToTray, setCloseToTray] = useState(true)
+  /** 浮窗范围/尺寸：和 miniVisible 一样只是镜像，真值在主进程 */
+  const [miniRange, setMiniRangeState] = useState<MiniRange>('month')
+  const [miniView, setMiniViewState] = useState<MiniView>('list')
+  const [miniWidth, setMiniWidth] = useState(DEFAULT_MINI_WIDTH)
+  const [miniHeight, setMiniHeight] = useState(DEFAULT_MINI_HEIGHT)
   const [panel, setPanel] = useState<PanelKind>('none')
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
@@ -76,6 +90,10 @@ export function useShell(): Shell {
   const refreshSettings = useCallback(() => {
     read(data.settings.get(), (s) => {
       setMiniVisible(s.miniVisible)
+      setMiniRangeState(s.miniRange)
+      setMiniViewState(s.miniView)
+      setMiniWidth(s.miniWidth)
+      setMiniHeight(s.miniHeight)
       setAutoStart(s.autoStart)
       setCloseToTray(s.closeToTray)
     })
@@ -84,12 +102,21 @@ export function useShell(): Shell {
   useEffect(() => {
     refreshSettings()
     read(getThemeMode(), setTheme)
+    // 主进程改了浮窗范围/尺寸（设置面板、托盘、另一块屏拖动）都会广播，
+    // 这里重新对齐镜像，分段控件的高亮才不会和真实窗口脱节
+    return data.onSettingsChanged(refreshSettings)
   }, [refreshSettings])
 
   /** 主题既要落到界面状态，又要写回主进程的 nativeTheme */
   function chooseTheme(mode: ThemeMode): void {
     setTheme(mode)
     void setThemeMode(mode)
+  }
+
+  /** 浮窗尺寸是「宽 + 高」两个 state，设置面板点一次预设要一起改 */
+  function setMiniSize(width: number, height: number): void {
+    setMiniWidth(width)
+    setMiniHeight(height)
   }
 
   /** 拖动详情面板左边缘调整宽度 */
@@ -129,9 +156,16 @@ export function useShell(): Shell {
     chooseTheme,
     maximized,
     miniVisible,
+    miniRange,
+    miniView,
+    miniWidth,
+    miniHeight,
     autoStart,
     closeToTray,
     setMiniVisible,
+    setMiniRange: setMiniRangeState,
+    setMiniView: setMiniViewState,
+    setMiniSize,
     setAutoStart,
     setCloseToTray,
     refreshSettings,

@@ -117,6 +117,14 @@ const CASES = [
     optional: true
   },
   { name: 'desktop-ui', group: 'runtime', script: 'scripts/ui-desktop.mjs', timeout: 600_000, optional: true },
+  // 浮窗 1天/1周/1月 + 可调尺寸（独立 Electron 实例，自己写跨天数据）
+  {
+    name: 'mini-range',
+    group: 'runtime',
+    script: 'scripts/verify-mini-range.mjs',
+    timeout: 420_000,
+    optional: true
+  },
   {
     name: 'mobile-ui',
     group: 'runtime',

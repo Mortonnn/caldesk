@@ -6,7 +6,7 @@
  *   2. `--cell-row-fit` 量在第一格上 —— 格子行数随窗口高度变
  */
 import { useLayoutEffect, useRef, useState } from 'react'
-import { AnimatePresence, motion, type Variants } from 'framer-motion'
+import { AnimatePresence, motion, useReducedMotion, type Variants } from 'framer-motion'
 import { format, isSameMonth, isToday } from 'date-fns'
 import type { EventOccurrence } from '@shared/types'
 import { isDoneLine, lineText, splitLines } from '@shared/types'
@@ -73,6 +73,14 @@ export function MonthGrid(props: {
     return () => ro.disconnect()
   }, [gridKey])
 
+  const reducedMotion = useReducedMotion()
+  const gridRows = Math.max(1, Math.round(days.length / 7))
+  const selectedIndex = selected
+    ? days.findIndex((day) => format(day, 'yyyy-MM-dd') === selected)
+    : -1
+  const lensCol = selectedIndex >= 0 ? selectedIndex % 7 : 0
+  const lensRow = selectedIndex >= 0 ? Math.floor(selectedIndex / 7) : 0
+
   /*
    * 选中透镜的位置：第几列 / 第几行。
    * 交给 CSS 变量（@property 注册成 <number> 才能插值）驱动，
@@ -98,6 +106,20 @@ export function MonthGrid(props: {
           animate="animate"
           exit="exit"
         >
+          {selectedIndex >= 0 && (
+            <motion.div
+              className="grid-lens"
+              aria-hidden="true"
+              initial={false}
+              animate={{ x: `${lensCol * 100}%`, y: `${lensRow * 100}%` }}
+              transition={
+                reducedMotion
+                  ? { duration: 0 }
+                  : { type: 'spring', stiffness: 420, damping: 30, mass: 0.72 }
+              }
+              style={{ height: `calc(100% / ${gridRows})` }}
+            />
+          )}
           {days.map((day, dayIndex) => {
             const key = format(day, 'yyyy-MM-dd')
             const lines = splitLines(cells[key] ?? '')

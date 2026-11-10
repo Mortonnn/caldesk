@@ -7,6 +7,17 @@
  */
 import { useEffect, useState } from 'react'
 import { APP_VERSION, DEFAULT_SERVER_URL, PROJECT_URL, hasDefaultServer } from '@shared/identity'
+import {
+  MINI_MAX_HEIGHT,
+  MINI_MAX_WIDTH,
+  MINI_MIN_HEIGHT,
+  MINI_MIN_WIDTH,
+  MINI_RANGE_LABEL,
+  MINI_RANGE_ORDER,
+  MINI_SIZE_PRESETS,
+  MINI_VIEW_LABEL,
+  MINI_VIEW_ORDER
+} from '@shared/mini'
 import { THEME_LABEL, THEME_ORDER } from '../theme'
 import { data } from '../data'
 import { buildAiGuide } from './aiGuide'
@@ -58,6 +69,13 @@ export function SettingsPanel(props: {
     chooseTheme,
     miniVisible,
     setMiniVisible,
+    miniRange,
+    setMiniRange,
+    miniView,
+    setMiniView,
+    miniWidth,
+    miniHeight,
+    setMiniSize,
     autoStart,
     setAutoStart,
     closeToTray,
@@ -101,6 +119,47 @@ export function SettingsPanel(props: {
 
   const guide = buildAiGuide({ port: mcpInfo?.port ?? null, url: mcpInfo?.url ?? null })
   const canRestoreServer = hasDefaultServer()
+  /** 当前尺寸正好落在某一档预设上时高亮那一档；Windows 高 DPI 下 setBounds 可能回 1px 误差，留 2px 容差 */
+  const activeSizePreset = MINI_SIZE_PRESETS.find(
+    (p) => Math.abs(p.width - miniWidth) <= 2 && Math.abs(p.height - miniHeight) <= 2
+  )
+  /** 当前尺寸不等于任何预设 → 浮窗大小里多出「自定义」并自动选中 */
+  const isCustomSize = !activeSizePreset
+  const [resWidth, setResWidth] = useState(String(miniWidth))
+  const [resHeight, setResHeight] = useState(String(miniHeight))
+
+  /* 点预设 / 拖把手 / 主进程广播尺寸变化时，分辨率输入框跟着走 */
+  useEffect(() => {
+    const matched = MINI_SIZE_PRESETS.find(
+      (p) => Math.abs(p.width - miniWidth) <= 2 && Math.abs(p.height - miniHeight) <= 2
+    )
+    setResWidth(String(matched?.width ?? miniWidth))
+    setResHeight(String(matched?.height ?? miniHeight))
+  }, [miniWidth, miniHeight])
+
+  const parsedResWidth = Math.round(Number(resWidth))
+  const parsedResHeight = Math.round(Number(resHeight))
+  const resValid =
+    Number.isFinite(parsedResWidth) &&
+    Number.isFinite(parsedResHeight) &&
+    parsedResWidth >= MINI_MIN_WIDTH &&
+    parsedResWidth <= MINI_MAX_WIDTH &&
+    parsedResHeight >= MINI_MIN_HEIGHT &&
+    parsedResHeight <= MINI_MAX_HEIGHT
+
+  function applyMiniResolution(): void {
+    if (!resValid) return
+    setMiniSize(parsedResWidth, parsedResHeight)
+    read(
+      data.mini.setSize(parsedResWidth, parsedResHeight),
+      (r) => {
+        setMiniSize(r.width, r.height)
+        setResWidth(String(r.width))
+        setResHeight(String(r.height))
+      },
+      (e) => setSyncMsg(`浮窗分辨率设置失败：${e.message}`)
+    )
+  }
 
   function copyGuide(): void {
     void navigator.clipboard.writeText(guide).then(() => {
@@ -181,6 +240,125 @@ export function SettingsPanel(props: {
           >
             <span className="switch-knob" />
           </button>
+        </div>
+
+        {/* 显示样式：列表是原来的日程流，月视图是整月九宫格 */}
+        <div className="pop-row">
+          <span className="pop-label-row">显示样式</span>
+          <div className="seg-group mini-seg mini-view-seg">
+            {MINI_VIEW_ORDER.map((v) => (
+              <button
+                key={v}
+                className={`seg-item ${miniView === v ? 'on' : ''}`}
+                onClick={() => {
+                  setMiniView(v)
+                  read(data.settings.setMiniView(v), () => {}, (e) =>
+                    setSyncMsg(`浮窗样式设置失败：${e.message}`)
+                  )
+                }}
+              >
+                {MINI_VIEW_LABEL[v]}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* 月视图天然按整月显示，范围选项只在列表模式下有意义，直接收起 */}
+        {miniView === 'list' && (
+          <div className="pop-row">
+            <span className="pop-label-row">显示范围</span>
+            <div className="seg-group mini-seg mini-range-seg">
+              {MINI_RANGE_ORDER.map((m) => (
+                <button
+                  key={m}
+                  className={`seg-item ${miniRange === m ? 'on' : ''}`}
+                  onClick={() => {
+                    setMiniRange(m)
+                    read(data.settings.setMiniRange(m), () => {}, (e) =>
+                      setSyncMsg(`浮窗范围设置失败：${e.message}`)
+                    )
+                  }}
+                >
+                  {MINI_RANGE_LABEL[m]}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* 预设只是快捷入口；拖把手自由缩放后尺寸不等于任何预设，就多出一档「自定义」 */}
+        <div className="pop-row">
+          <span className="pop-label-row">浮窗大小</span>
+          <div className="seg-group mini-seg mini-size-seg">
+            {MINI_SIZE_PRESETS.map((p) => (
+              <button
+                key={p.id}
+                className={`seg-item ${activeSizePreset?.id === p.id ? 'on' : ''}`}
+                title={`${p.width} × ${p.height}`}
+                onClick={() => {
+                  setMiniSize(p.width, p.height)
+                  read(
+                    data.mini.setSize(p.width, p.height),
+                    (r) => setMiniSize(r.width, r.height),
+                    (e) => setSyncMsg(`浮窗大小设置失败：${e.message}`)
+                  )
+                }}
+              >
+                {p.label}
+              </button>
+            ))}
+            {isCustomSize && (
+              <button
+                className="seg-item on"
+                title={`${miniWidth} × ${miniHeight}`}
+                aria-pressed="true"
+              >
+                自定义
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* 分辨率输入：点预设时自动带出对应宽高；手动应用后浮窗大小自动跳到「自定义」 */}
+        <div className="pop-row mini-res-row">
+          <span className="pop-label-row">浮窗分辨率</span>
+          <div className="mini-res-control">
+            <input
+              className="mini-res-input"
+              type="number"
+              inputMode="numeric"
+              aria-label="浮窗宽度"
+              min={MINI_MIN_WIDTH}
+              max={MINI_MAX_WIDTH}
+              value={resWidth}
+              onChange={(e) => setResWidth(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') applyMiniResolution()
+              }}
+            />
+            <span className="mini-res-x">×</span>
+            <input
+              className="mini-res-input"
+              type="number"
+              inputMode="numeric"
+              aria-label="浮窗高度"
+              min={MINI_MIN_HEIGHT}
+              max={MINI_MAX_HEIGHT}
+              value={resHeight}
+              onChange={(e) => setResHeight(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') applyMiniResolution()
+              }}
+            />
+            <button
+              className="ghost mini-res-apply"
+              disabled={!resValid}
+              title={`范围 ${MINI_MIN_WIDTH}–${MINI_MAX_WIDTH} × ${MINI_MIN_HEIGHT}–${MINI_MAX_HEIGHT}`}
+              onClick={applyMiniResolution}
+            >
+              应用
+            </button>
+          </div>
         </div>
       </section>
 

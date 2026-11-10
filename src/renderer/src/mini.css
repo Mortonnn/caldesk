@@ -3,16 +3,16 @@
  *  浮窗（右下角常驻小窗）
  * ============================================================================
  *
- *  窗口本身是 frame:false + transparent:true 的固定 304×320 方框（写死在
- *  src/main/index.ts），由此推三条硬约束：
+ *  窗口本身是 frame:false + transparent:true，尺寸由主进程记住，并靠右下角
+ *  .mini-resize-grip 拖动自由缩放（最小 280×240，最大 760×1000），由此推三条硬约束：
  *
  *  1. **不能用 backdrop-filter**。透明窗口背后是真实桌面，合成器不会把系统
  *     桌面当成 backdrop 交给网页，所以模糊采不到任何东西 —— 那是一次纯亏的
  *     全窗高斯模糊。真·半透明只能靠 rgba 染色 + 顶亮/底暗的 1px 镜面边 + 投影。
  *
- *  2. 阴影只能画在窗口里面。窗口 304×320 不能再大，所以 body 留 6px 透明边，
- *     面板实际 292×308；投影也必须是一条能完整落进这 6px 的软影
- *     （--e3 是 64px 模糊，会被窗口边缘切出一条硬线，详见 .mini 的注释）。
+ *  2. 阴影只能画在窗口里面。body 固定留 6px 透明边给投影落地，投影也必须是一条
+ *     能完整落进这 6px 的软影（--e3 是 64px 模糊，会被窗口边缘切出一条硬线，
+ *     详见 .mini 的注释）。窗口放大后这条边距不变，面板跟着内容区一起长。
  *
  *  3. 可读性按"最坏壁纸"验算，两种主题都要过：
  *     · 深色：0.72 的墨压在纯白壁纸上 ≈ rgb(80,80,80)，--text #e9ecf1 对它 ≈ 7.1:1
@@ -27,7 +27,7 @@
 @import './design/material.css';
 @import './design/motion.css';
 
-/* 透明窗口：6px 透明边给面板投影落地（窗口尺寸由主进程固定，不能再大） */
+/* 透明窗口：6px 透明边给面板投影落地（窗口可自由缩放，这条边距始终不变） */
 .mini-body {
   padding: var(--s-3);
   background: transparent;
@@ -106,6 +106,7 @@
   display: flex;
   align-items: center;
   gap: var(--s-3);
+  min-width: 0;
   font-size: var(--fs-title);
   line-height: var(--lh-title);
   font-weight: var(--fw-semi);
@@ -119,6 +120,16 @@
   display: grid;
   place-items: center;
   color: var(--accent);
+}
+
+/* 多天标题（M月d日 – M月d日）比单天日期小一档：header 不能被一段日期撑爆 */
+.mini-title-range {
+  min-width: 0;
+  font-size: var(--fs-body);
+  line-height: var(--lh-title);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .mini-sub {
@@ -351,6 +362,325 @@
   height: 5px;
   border-radius: 50%;
   opacity: 0.85;
+}
+
+/* -------------------------------------------------------------- 多天分组 */
+/*
+ * 1周/1月不是把 8~31 天摊平成一张长列表：先按自然周包一层 week，
+ * 再按天包一层 day。week 之间用更亮的发丝线 + 更大留白，day 之间用普通发丝线，
+ * 纵向扫读时先认出"周"、再认出"天"，不会糊成一片。
+ */
+.mini-days {
+  display: flex;
+  flex-direction: column;
+}
+
+.mini-week {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  animation: enter-up var(--t-in) var(--ease-out) backwards;
+}
+
+/* 周与周之间：留一段比天更大的呼吸；真正的分界线是下面 week-head 的
+   淡色带 + 上下发丝线，扫读时"周"比"天"先跳出来 */
+.mini-week + .mini-week {
+  margin-top: var(--s-5);
+}
+
+/* 周标题比天标题再重一档：整行 --bg-elev-2 淡色带 + 上下各一条发丝线，
+   通栏、无圆角、不做卡片 —— 只是让"换周"在扫读时先于"换天"跳出来。
+   列表滚动时它吸在 .mini-list 顶部：本周/下周/下下周…一直可见；
+   滚过这一周后，它被下一周的标题顶走，不会永远挂在最上面。 */
+.mini-week-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-6);
+  /* 必须是不透明底：粘在顶部时下面的日期行会从它后面滚过去 */
+  background:
+    linear-gradient(var(--bg-elev-2), var(--bg-elev-2)),
+    var(--panel);
+  box-shadow:
+    inset 0 1px 0 var(--hairline),
+    inset 0 -1px 0 var(--hairline);
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  font-weight: var(--fw-semi);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+  letter-spacing: var(--tracking-ui);
+}
+
+.mini-day {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* 天与天之间：一档更亮的发丝线（比行与行之间的 --hairline 明显，
+   但又不能压过周与周之间那段留白 + 强线） */
+.mini-day + .mini-day {
+  margin-top: var(--s-1);
+  box-shadow: inset 0 1px 0 var(--hairline-strong);
+}
+
+/* 天标题带一层 --bg-elev 通栏淡色带：白底上光靠加粗+发丝线太弱，
+   扫读时要有"这里换了一天"的第一眼落点；通栏、无圆角，不做卡片 */
+.mini-day-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  min-height: 24px;
+  padding: var(--s-1) var(--s-6);
+  background: var(--bg-elev);
+}
+
+.mini-day-date {
+  font-size: var(--fs-label);
+  line-height: var(--lh-label);
+  font-weight: var(--fw-semi);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+.mini-day-week {
+  font-size: var(--fs-micro);
+  line-height: var(--lh-micro);
+  color: var(--text-dim);
+}
+
+/* 今天徽标：和 header 的待办药丸同一套 accent-soft，扫一眼就知道范围从哪起 */
+.mini-day-today {
+  display: inline-flex;
+  align-items: center;
+  height: 14px;
+  padding: 0 var(--s-2);
+  border-radius: var(--r-pill);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: var(--fs-micro);
+  line-height: 1;
+  letter-spacing: var(--tracking-ui);
+}
+
+.mini-day-count {
+  margin-left: auto;
+  font-size: var(--fs-micro);
+  line-height: var(--lh-micro);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+/* 空白天只留 day-head 这一行：右侧写「无安排」，不铺任何空行 */
+.mini-day-none {
+  margin-left: auto;
+  font-size: var(--fs-micro);
+  line-height: var(--lh-micro);
+  color: var(--text-faint);
+}
+
+/* -------------------------------------------------------------- 月视图 */
+/*
+ * 整月网格：7 列、周一起，固定 35/42 格铺满列表区。
+ * 网格用 flex:1 + grid-auto-rows:1fr，窗口变高变矮时行高自己均分，
+ * 不给任何格子写死像素高度 —— 320×380 和 480×660 都不能横向溢出。
+ */
+.mini-month-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-1);
+  padding: 0 var(--s-4);
+}
+
+.mini-month-nav-btn {
+  width: 24px;
+  min-width: 24px;
+  font-size: var(--fs-body);
+  line-height: 1;
+}
+
+.mini-month-nav-today {
+  width: auto;
+  min-width: 0;
+  padding: 0 var(--s-3);
+  font-size: var(--fs-caption);
+  line-height: 1;
+  color: var(--text);
+}
+
+.mini-month {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  min-height: 0;
+  margin: 0 calc(var(--s-4) * -1);
+}
+
+.mini-month-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-micro);
+  text-align: center;
+}
+
+.mini-month-weekday {
+  min-width: 0;
+  text-align: center;
+}
+
+.mini-month-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-auto-rows: 1fr;
+  min-height: 0;
+}
+
+/* 每格既是按钮又是日历格：通栏发丝线分隔，不要圆角/卡片感 */
+.mini-month-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--s-1) var(--s-1) 0;
+  overflow: hidden;
+  text-align: left;
+  box-shadow:
+    inset -1px 0 0 var(--hairline),
+    inset 0 -1px 0 var(--hairline);
+  transition: background var(--t-fast) var(--ease-alpha);
+}
+
+.mini-month-cell:hover {
+  background: var(--bg-elev);
+}
+
+.mini-month-daynum {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  height: 13px;
+  font-size: var(--fs-micro);
+  line-height: 1;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+/* 今天：日期数字换成 accent 药丸；格子本身再加 .today 方便脚本定位 */
+.mini-month-today {
+  padding: 0 var(--s-1);
+  border-radius: var(--r-pill);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: var(--fw-semi);
+}
+
+.mini-month-cell.outside .mini-month-daynum {
+  color: var(--text-faint);
+}
+
+.mini-month-cell.outside .mini-month-line,
+.mini-month-cell.outside .mini-month-more {
+  opacity: 0.55;
+}
+
+.mini-month-items {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* 单条内容行：色点 + 文本，超出省略；完成态淡色 + 删除线 */
+.mini-month-line {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  min-width: 0;
+  font-size: var(--fs-micro);
+  line-height: var(--lh-micro);
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.mini-month-line-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mini-month-line.done {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+
+.mini-month-line.done .mini-month-dot {
+  opacity: 0.4;
+}
+
+.mini-month-dot {
+  flex: 0 0 4px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  opacity: 0.85;
+}
+
+.mini-month-more {
+  font-size: var(--fs-micro);
+  line-height: var(--lh-micro);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+/* -------------------------------------------------------------- 缩放手柄 */
+/*
+ * transparent 窗口开不了原生 resizable，这颗把手是自己拖的：
+ * 只占右下角 14×14，超出这个范围完全不拦截鼠标；cursor 和 no-drag 都要显式给，
+ * 否则会被 header 的拖拽区或 base.css 的按钮光标覆盖。
+ */
+.mini-resize-grip {
+  position: absolute;
+  right: var(--s-1);
+  bottom: var(--s-1);
+  z-index: 2;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  -webkit-app-region: no-drag;
+  touch-action: none;
+  user-select: none;
+  opacity: 0.55;
+  /* 两条平行斜发丝线，暗示"这个角能拖"；透明窗口不能靠阴影 */
+  background:
+    linear-gradient(135deg, transparent 0 52%, var(--hairline-strong) 52% 62%, transparent 62%),
+    linear-gradient(135deg, transparent 0 72%, var(--hairline-strong) 72% 82%, transparent 82%);
+  transition: opacity var(--t-fast) var(--ease-alpha);
+}
+
+.mini-resize-grip:hover {
+  opacity: 1;
 }
 
 /* ------------------------------------------------------------------ 底栏 */

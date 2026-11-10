@@ -55,6 +55,10 @@ const DESKTOP_TSX = readDesktopSources()
 const MOBILE_TSX = read('src/renderer/src/MobileApp.tsx')
 const MINI_TSX = read('src/renderer/src/mini.tsx')
 const MAIN_TS = read('src/main/index.ts')
+/** 浮窗增强的共享契约（范围枚举 / 三段文案 / 尺寸预设） */
+const MINI_SHARED = read('src/shared/mini.ts')
+/** 设置面板：浮窗范围/尺寸两个分段组在这里，单独读一份好精确定位 */
+const SETTINGS_TSX = read('src/renderer/src/app/SettingsPanel.tsx')
 /** 共享组件：重复规则芯片 / 手机底栏 / 手机登录页 */
 const CHIP_TSX = read('src/renderer/src/RepeatChip.tsx')
 const DOCK_TSX = read('src/renderer/src/GlassDock.tsx')
@@ -307,6 +311,7 @@ check('styles.css 有 .cell::before（check-tokens/check-reduced 断言其 trans
 check('styles.css 有 .cell:hover .cal-del 之类 hover 显隐', /\.cal-item:hover \.cal-del/.test(DESKTOP_CSS))
 check('mobile.css 有 .m-task-label::after（3 条脚本读它的 transform）', /\.m-task-label::after/.test(MOBILE_CSS))
 check('styles.css 有 .task-label::after（桌面删除线）', /\.task-label::after/.test(DESKTOP_CSS))
+check('styles.css 有 .grid-lens（主界面选中日格的玻璃透镜）', /\.grid-lens/.test(DESKTOP_CSS))
 check('mobile.css 声明 overscroll 行为', /overscroll-behavior/.test(MOBILE_CSS))
 
 console.log('\n== 4. TSX 类名与 aria 契约 ==')
@@ -409,6 +414,127 @@ for (const [f, script] of [
   check(`${f} 入口是 ${script}`, html.includes(script))
   check(`${f} 有 CSP`, html.includes('Content-Security-Policy'))
 }
+
+console.log('\n== 9. 浮窗范围 / 尺寸增强契约 ==')
+// 多天分组：day 与 day、week 与 week 的分隔全靠这些 class，改名字会让回归脚本失明
+for (const s of [
+  '.mini-days',
+  '.mini-day',
+  '.mini-day-head',
+  '.mini-day-date',
+  '.mini-day-week',
+  '.mini-day-today',
+  '.mini-day-count',
+  '.mini-day-none',
+  '.mini-week',
+  '.mini-week-head',
+  '.mini-resize-grip'
+]) {
+  cssHas(MINI_CSS, s, 'mini.css')
+}
+check(
+  'mini.css 周标题是 sticky 吸顶',
+  /\.mini-week-head\s*\{[^}]*position:\s*sticky/s.test(MINI_CSS),
+  '没找到 .mini-week-head { position: sticky }'
+)
+for (const c of [
+  'mini-days',
+  'mini-day-head',
+  'mini-day-today',
+  'mini-day-count',
+  'mini-day-none',
+  'mini-week-head',
+  'mini-resize-grip'
+]) {
+  tsxHas(MINI_TSX, c, 'mini.tsx')
+}
+check(
+  'shared/mini.ts 定义 MiniRange 联合类型',
+  /export\s+type\s+MiniRange\s*=/.test(MINI_SHARED),
+  '找不到 export type MiniRange'
+)
+check(
+  'shared/mini.ts 含 1天/1周/1月 三段文案',
+  ['1天', '1周', '1月'].every((s) => MINI_SHARED.includes(s)),
+  'MINI_RANGE_LABEL 的三段文案不全'
+)
+check(
+  'shared/mini.ts 定义 MINI_SIZE_PRESETS 与 DEFAULT_MINI_WIDTH/HEIGHT',
+  ['MINI_SIZE_PRESETS', 'DEFAULT_MINI_WIDTH', 'DEFAULT_MINI_HEIGHT'].every((s) =>
+    MINI_SHARED.includes(s)
+  ),
+  '尺寸共享常量缺失'
+)
+srcHas(SETTINGS_TSX, 'MINI_RANGE_LABEL', 'SettingsPanel.tsx')
+srcHas(SETTINGS_TSX, 'MINI_RANGE_ORDER', 'SettingsPanel.tsx')
+check(
+  'SettingsPanel 使用 mini-range-seg / mini-size-seg 分段组',
+  SETTINGS_TSX.includes('mini-range-seg') && SETTINGS_TSX.includes('mini-size-seg'),
+  '两个分段组的专属 class 缺失'
+)
+cssHas(DESKTOP_CSS, '.seg-group.mini-seg', 'styles.css')
+
+console.log('\n== 10. 浮窗月视图契约 ==')
+for (const s of [
+  '.mini-month',
+  '.mini-month-nav',
+  '.mini-month-weekdays',
+  '.mini-month-weekday',
+  '.mini-month-grid',
+  '.mini-month-cell',
+  '.mini-month-daynum',
+  '.mini-month-items',
+  '.mini-month-line',
+  '.mini-month-dot',
+  '.mini-month-more',
+  '.mini-month-today'
+]) {
+  cssHas(MINI_CSS, s, 'mini.css')
+}
+for (const c of [
+  'mini-month-grid',
+  'mini-month-cell',
+  'mini-month-weekday',
+  'mini-month-nav',
+  'mini-month-today',
+  'mini-month-more'
+]) {
+  tsxHas(MINI_TSX, c, 'mini.tsx')
+}
+check(
+  'shared/mini.ts 定义 MiniView 联合类型',
+  /export\s+type\s+MiniView\s*=/.test(MINI_SHARED),
+  '找不到 export type MiniView'
+)
+check(
+  'shared/mini.ts 含 列表/月视图 两段文案',
+  ['列表', '月视图'].every((s) => MINI_SHARED.includes(s)),
+  'MINI_VIEW_LABEL 的文案不全'
+)
+check(
+  'shared/mini.ts 定义 MINI_VIEW_ORDER / MINI_VIEW_LABEL',
+  MINI_SHARED.includes('MINI_VIEW_ORDER') && MINI_SHARED.includes('MINI_VIEW_LABEL'),
+  '显示样式共享常量缺失'
+)
+srcHas(SETTINGS_TSX, 'MINI_VIEW_ORDER', 'SettingsPanel.tsx')
+srcHas(SETTINGS_TSX, 'MINI_VIEW_LABEL', 'SettingsPanel.tsx')
+check(
+  'SettingsPanel 有 mini-view-seg 分段组',
+  SETTINGS_TSX.includes('mini-view-seg'),
+  '找不到 mini-view-seg'
+)
+
+console.log('\n== 11. 浮窗分辨率 / 自定义尺寸契约 ==')
+for (const c of ['mini-res-row', 'mini-res-control', 'mini-res-input', 'mini-res-x', 'mini-res-apply']) {
+  tsxHas(SETTINGS_TSX, c, 'SettingsPanel.tsx')
+}
+for (const s of ['.mini-res-control', '.mini-res-input', '.mini-res-x', '.mini-res-apply']) {
+  cssHas(DESKTOP_CSS, s, 'styles.css')
+}
+srcHas(SETTINGS_TSX, '浮窗分辨率', 'SettingsPanel.tsx')
+srcHas(SETTINGS_TSX, '自定义', 'SettingsPanel.tsx')
+srcHas(SETTINGS_TSX, 'aria-label="浮窗宽度"', 'SettingsPanel.tsx')
+srcHas(SETTINGS_TSX, 'aria-label="浮窗高度"', 'SettingsPanel.tsx')
 
 console.log(`\n${failures === 0 ? '✔' : '✘'} 契约检查：${passes} 通过 / ${failures} 失败\n`)
 if (failures > 0) process.exit(1)

@@ -245,9 +245,11 @@ const FAKE_HOST = String.raw`(() => {
       onMaximizedChange: () => () => {}
     },
     settings: {
-      get: () => Promise.resolve({ miniVisible: false, miniPinned: false, autoStart: false, closeToTray: false }),
+      get: () => Promise.resolve({ miniVisible: false, miniPinned: false, miniRange: 'day', miniView: 'list', miniWidth: 380, miniHeight: 500, autoStart: false, closeToTray: false }),
       setAutoStart: () => Promise.resolve(false),
-      setCloseToTray: () => Promise.resolve(false)
+      setCloseToTray: () => Promise.resolve(false),
+      setMiniRange: (range) => Promise.resolve(range),
+      setMiniView: (view) => Promise.resolve(view)
     },
     calendars: {
       list: () => Promise.resolve(okR(store.calendars)),
@@ -350,11 +352,14 @@ const FAKE_HOST = String.raw`(() => {
     },
     app: { openMain: () => Promise.resolve() },
     onDataChanged: () => () => {},
+    onSettingsChanged: () => () => {},
     mini: {
       toggle: () => Promise.resolve(false),
       setVisible: () => Promise.resolve(false),
       hide: () => Promise.resolve(),
-      pin: () => Promise.resolve(false)
+      pin: () => Promise.resolve(false),
+      setSize: (width, height) => Promise.resolve({ width, height }),
+      resetSize: () => Promise.resolve({ width: 380, height: 500 })
     },
     mcp: { getInfo: () => Promise.resolve({ port: 19283, url: 'http://127.0.0.1:19283/mcp' }) }
   }
@@ -370,8 +375,9 @@ const FAKE_HOST = String.raw`(() => {
     return out
   }
   const wrapped = wrap(API)
-  // onDataChanged / onDone / onMaximizedChange 必须仍然返回取消函数，不能变成"返回值是 Promise"
+  // onDataChanged / onSettingsChanged / onDone / onMaximizedChange 必须仍然返回取消函数，不能变成"返回值是 Promise"
   wrapped.onDataChanged = () => () => {}
+  wrapped.onSettingsChanged = () => () => {}
   wrapped.sync.onDone = () => () => {}
   wrapped.window.onMaximizedChange = () => () => {}
 

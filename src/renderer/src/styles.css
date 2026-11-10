@@ -680,8 +680,33 @@
   background: color-mix(in srgb, var(--bg-base) 18%, transparent);
 }
 
+/*
+ * 会跑的选中透镜：整张月历只有这一块玻璃高亮，在 42 个格子之间移动。
+ * 位置由 MonthGrid.tsx 用 transform 的百分比驱动，宽度 1/7、高度 1/行数，
+ * 所以窗口缩放 / 换月重排后不用重新量格子。
+ */
+.grid-lens {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: calc(100% / 7);
+  z-index: 0;
+  border-radius: var(--r-card);
+  pointer-events: none;
+  background:
+    var(--mat-grad) padding-box,
+    color-mix(in srgb, var(--accent) 15%, transparent) padding-box;
+  box-shadow:
+    inset 0 1px 0 var(--rim-inset),
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, var(--hairline)),
+    0 12px 30px -22px color-mix(in srgb, var(--accent) 55%, transparent);
+  will-change: transform;
+}
+
+/* 旧版选中态是一层会从 0.9 弹回 1 的玻璃底；现在由上面的移动透镜承载，
+   这里保留透明底，选中文字仍按原来的颜色规则走。 */
 .cell.selected {
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  background: transparent;
 }
 
 .daynum {
@@ -1459,6 +1484,69 @@
     inset 0 1px 0 var(--rim-inset),
     inset 0 0 0 1px var(--hairline),
     var(--e1);
+}
+
+/* 设置面板右侧的紧凑分段控件：不跟 .pop-row 拉满，三档刚好一拇指宽 */
+.seg-group.mini-seg {
+  flex: 0 0 216px;
+  width: 216px;
+}
+
+/* 浮窗分辨率：宽 × 高 + 应用。点预设时输入框自动跟着预设走；手动应用后
+   .mini-size-seg 会多出「自定义」并自动选中（由 SettingsPanel 计算）。 */
+.mini-res-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-1);
+  flex: 0 0 216px;
+  width: 216px;
+}
+
+.mini-res-input {
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
+  height: 30px;
+  padding: 0 var(--s-2);
+  border: none;
+  border-radius: var(--r-control);
+  background: var(--bg-elev);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  color: var(--text);
+  font-size: var(--fs-caption);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+  text-align: center;
+  appearance: textfield;
+  transition:
+    background-color var(--t-fast) var(--ease-out),
+    box-shadow var(--t-fast) var(--ease-out);
+}
+
+.mini-res-input::-webkit-outer-spin-button,
+.mini-res-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.mini-res-input:focus {
+  outline: none;
+  background: var(--surface-2);
+  box-shadow:
+    inset 0 0 0 1px var(--accent),
+    0 0 0 3px var(--accent-soft);
+}
+
+.mini-res-x {
+  color: var(--text-faint);
+  font-size: var(--fs-caption);
+}
+
+.mini-res-apply {
+  height: 30px;
+  padding: 0 var(--s-3);
+  flex: 0 0 auto;
 }
 
 /*

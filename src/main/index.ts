@@ -34,6 +34,21 @@ import {
   updateNote
 } from './db'
 import type { EventInput, NoteInput } from '@shared/types'
+import {
+  DEFAULT_MINI_HEIGHT,
+  DEFAULT_MINI_WIDTH,
+  isMiniRange,
+  isMiniView,
+  LEGACY_MINI_SIZE_PRESETS,
+  MINI_MARGIN,
+  MINI_MAX_HEIGHT,
+  MINI_MAX_WIDTH,
+  MINI_MIN_HEIGHT,
+  MINI_MIN_WIDTH,
+  MINI_SIZE_PRESETS,
+  type MiniRange,
+  type MiniView
+} from '@shared/mini'
 import { startApiServer, type ApiHandle } from './api'
 import { migrateFromOldApp, killAllMigrateProcs } from './migrate'
 import {
@@ -128,12 +143,15 @@ const MIN_HEIGHT = 580
 const MAX_WIDTH = 1680
 const MAX_HEIGHT = 1060
 
-const MINI_WIDTH = 304
-const MINI_HEIGHT = 320
-const MINI_MARGIN = 16
+/*
+ * 浮窗尺寸/边距全部来自 @shared/mini：设置面板的预设、主进程的夹紧边界、
+ * 浮窗自己的 CSS 最小宽高必须是同一组数，否则点「大」和实际窗口对不上。
+ */
 
 let mainWindow: BrowserWindow | null = null
 let miniWindow: BrowserWindow | null = null
+/** 浮窗尺寸/位置落盘的防抖 timer（拖动时 60fps 的 resize 不能每次都写文件） */
+let miniSaveTimer: NodeJS.Timeout | null = null
 let apiHandle: ApiHandle | null = null
 let tray: Tray | null = null
 /** 退出流程中（用于区分"关窗到托盘"与"真正退出"） */
@@ -175,6 +193,16 @@ interface WindowState {
   maximized: boolean
   miniVisible: boolean
   miniPinned: boolean
+  /** 浮窗显示范围：1天 / 1周 / 1月，浮窗靠它决定拉几天数据 */
+  miniRange: MiniRange
+  /** 浮窗显示样式：列表 / 月视图 */
+  miniView: MiniView
+  /** 浮窗尺寸：拖 grip / 点预设后的真实宽高，下次启动按这个尺寸开 */
+  miniWidth: number
+  miniHeight: number
+  /** 浮窗左上角；没保存过（首次启动）就贴右下角 */
+  miniX?: number
+  miniY?: number
   /** 登录 Windows 后自动启动：默认开，启动到托盘不弹主窗口 */
   autoStart: boolean
   /** 关闭主窗口时收进托盘（默认开）；关掉就变成"关闭即退出" */
@@ -191,6 +219,13 @@ const DEFAULT_STATE: WindowState = {
   miniVisible: true,
   // 默认不压在所有窗口之上：需要时用浮窗上的图钉自己钉住
   miniPinned: false,
+  // 默认按 1 月显示：新安装用户第一眼看到的是完整一月，而不是一屏只有今天
+  miniRange: 'month',
+  // 默认列表：现有日程流才是老用户熟悉的样子，月视图是可选
+  miniView: 'list',
+  // 默认比旧的 304×320 大一档，日视图能舒服放下 7~8 行
+  miniWidth: DEFAULT_MINI_WIDTH,
+  miniHeight: DEFAULT_MINI_HEIGHT,
   // 默认开机自启：这是个"每天都会看一眼"的日历，登录后安静待在托盘里最合适
   autoStart: true,
   // 默认关闭窗口进托盘：后台同步和浮窗都还活着
@@ -210,6 +245,11 @@ function boolOr(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback
 }
 
+/** 数值夹紧：window-state.json 是外部文件，尺寸/坐标不能直接信 */
+function clampNum(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max)
+}
+
 /**
  * window-state.json 是磁盘上的外部文件：可能被手改、被旧版本写成别的类型、
  * 或者干脆是半截 JSON。字段必须逐个校验 ——
@@ -223,6 +263,18 @@ export function normalizeState(raw: unknown): WindowState {
   const mode = src.themeMode
   const x = finiteOr(src.x, Number.NaN)
   const y = finiteOr(src.y, Number.NaN)
+  const miniWidth = finiteOr(src.miniWidth, DEFAULT_STATE.miniWidth)
+  const miniHeight = finiteOr(src.miniHeight, DEFAULT_STATE.miniHeight)
+  // 旧版预设尺寸升级：落在旧档位上的窗口尺寸直接迁到新档位，避免被误判成「自定义」
+  const legacyPresetIndex = LEGACY_MINI_SIZE_PRESETS.findIndex(
+    (p) => Math.abs(p.width - miniWidth) <= 2 && Math.abs(p.height - miniHeight) <= 2
+  )
+  const normalizedMiniWidth =
+    legacyPresetIndex >= 0 ? MINI_SIZE_PRESETS[legacyPresetIndex].width : miniWidth
+  const normalizedMiniHeight =
+    legacyPresetIndex >= 0 ? MINI_SIZE_PRESETS[legacyPresetIndex].height : miniHeight
+  const miniX = finiteOr(src.miniX, Number.NaN)
+  const miniY = finiteOr(src.miniY, Number.NaN)
   return {
     x: Number.isFinite(x) ? x : undefined,
     y: Number.isFinite(y) ? y : undefined,
@@ -231,6 +283,13 @@ export function normalizeState(raw: unknown): WindowState {
     maximized: boolOr(src.maximized, DEFAULT_STATE.maximized),
     miniVisible: boolOr(src.miniVisible, DEFAULT_STATE.miniVisible),
     miniPinned: boolOr(src.miniPinned, DEFAULT_STATE.miniPinned),
+    // 旧版本没有这些字段：类型/数值不对就整整齐齐回落到默认，别把 undefined 带进 BrowserWindow
+    miniRange: isMiniRange(src.miniRange) ? src.miniRange : DEFAULT_STATE.miniRange,
+    miniView: isMiniView(src.miniView) ? src.miniView : DEFAULT_STATE.miniView,
+    miniWidth: clampNum(normalizedMiniWidth, MINI_MIN_WIDTH, MINI_MAX_WIDTH),
+    miniHeight: clampNum(normalizedMiniHeight, MINI_MIN_HEIGHT, MINI_MAX_HEIGHT),
+    miniX: Number.isFinite(miniX) ? miniX : undefined,
+    miniY: Number.isFinite(miniY) ? miniY : undefined,
     autoStart: boolOr(src.autoStart, DEFAULT_STATE.autoStart),
     closeToTray: boolOr(src.closeToTray, DEFAULT_STATE.closeToTray),
     themeMode: mode === 'light' || mode === 'dark' || mode === 'system' ? mode : DEFAULT_STATE.themeMode
@@ -305,17 +364,89 @@ function initialBounds(): Electron.Rectangle {
   }
 }
 
-/** 右下角：贴着工作区右下放置，自动避开任务栏 */
-function miniBounds(): { x: number; y: number; width: number; height: number } {
-  const wa = screen.getPrimaryDisplay().workArea
-  const width = Math.min(MINI_WIDTH, wa.width - MINI_MARGIN * 2)
-  const height = Math.min(MINI_HEIGHT, wa.height - MINI_MARGIN * 2)
+/**
+ * 浮窗边界：尺寸用保存值（也可以由调用方临时覆盖），位置没保存过就贴右下角，
+ * 最后统一夹进显示器工作区——拔掉副屏 / 改分辨率后，旧坐标可能整块落在屏外。
+ *
+ * 多屏判定优先用浮窗当前所在位置，其次用保存位置：用户把浮窗拖到副屏后，
+ * 点「重置大小」应该继续待在副屏，而不是跳回主屏右下角。
+ */
+function miniBounds(override?: {
+  width?: number
+  height?: number
+  /** 强制重新贴右下角（恢复默认尺寸时用），忽略保存/当前位置 */
+  dock?: boolean
+}): { x: number; y: number; width: number; height: number } {
+  const current = miniWindow && !miniWindow.isDestroyed() ? miniWindow.getBounds() : null
+  // 选屏用当前/保存的位置（dock 时也要选对显示器）；落点才区分是否强制贴右下角
+  const displayX = current?.x ?? state.miniX
+  const displayY = current?.y ?? state.miniY
+  const anchorX = override?.dock ? undefined : displayX
+  const anchorY = override?.dock ? undefined : displayY
+
+  let wa = screen.getPrimaryDisplay().workArea
+  if (displayX !== undefined && displayY !== undefined) {
+    const hit = screen
+      .getAllDisplays()
+      .find(
+        (d) =>
+          displayX >= d.workArea.x &&
+          displayX < d.workArea.x + d.workArea.width &&
+          displayY >= d.workArea.y &&
+          displayY < d.workArea.y + d.workArea.height
+      )
+    if (hit) wa = hit.workArea
+  }
+
+  // 先夹共享硬边界，再夹工作区：工作区比 MINI_MIN_* 还小的极端情况以工作区为准
+  const width = Math.min(
+    clampNum(override?.width ?? state.miniWidth, MINI_MIN_WIDTH, MINI_MAX_WIDTH),
+    wa.width
+  )
+  const height = Math.min(
+    clampNum(override?.height ?? state.miniHeight, MINI_MIN_HEIGHT, MINI_MAX_HEIGHT),
+    wa.height
+  )
+
+  if (anchorX === undefined || anchorY === undefined) {
+    return {
+      width,
+      height,
+      x: wa.x + Math.max(0, wa.width - width - MINI_MARGIN),
+      y: wa.y + Math.max(0, wa.height - height - MINI_MARGIN)
+    }
+  }
+  // 越界时往屏内推，保证整块窗口都能看见
   return {
     width,
     height,
-    x: wa.x + wa.width - width - MINI_MARGIN,
-    y: wa.y + wa.height - height - MINI_MARGIN
+    x: Math.min(Math.max(anchorX, wa.x), wa.x + wa.width - width),
+    y: Math.min(Math.max(anchorY, wa.y), wa.y + wa.height - height)
   }
+}
+
+/**
+ * 浮窗尺寸/位置落盘（250ms 防抖）。
+ *
+ * grip 拖拽会以 ~60fps 连续 setBounds，每次都写 window-state.json 既卡又没必要；
+ * 统一在这里攒到停手后再落一次，并顺手通知主窗口刷新「浮窗大小」预设高亮。
+ * 浮窗关着、窗口还没建时也要能落盘，所以不依赖窗口一定存在。
+ */
+function scheduleMiniStateSave(): void {
+  if (miniSaveTimer) clearTimeout(miniSaveTimer)
+  miniSaveTimer = setTimeout(() => {
+    miniSaveTimer = null
+    if (miniWindow && !miniWindow.isDestroyed()) {
+      const bounds = miniWindow.getBounds()
+      state.miniWidth = clampNum(bounds.width, MINI_MIN_WIDTH, MINI_MAX_WIDTH)
+      state.miniHeight = clampNum(bounds.height, MINI_MIN_HEIGHT, MINI_MAX_HEIGHT)
+      state.miniX = bounds.x
+      state.miniY = bounds.y
+    }
+    persistState()
+    // 设置面板的预设高亮要跟着真实尺寸走；浮窗本身不需要重读设置
+    safeSend(mainWindow, 'settings:changed')
+  }, 250)
 }
 
 /* --------------------------- 主窗口 --------------------------- */
@@ -653,7 +784,14 @@ function createMiniWindow(): void {
     ...b,
     frame: false,
     transparent: true,
+    // 透明窗口不能开 resizable：Electron 官方文档明确说 transparent 与 resizable
+    // 在部分平台会互相破坏（透明/玻璃底直接失效）。尺寸调整统一走渲染层 grip 调
+    // mini:set-size → setBounds（对透明窗口有效），所以这里只保留尺寸约束。
     resizable: false,
+    minWidth: MINI_MIN_WIDTH,
+    minHeight: MINI_MIN_HEIGHT,
+    maxWidth: MINI_MAX_WIDTH,
+    maxHeight: MINI_MAX_HEIGHT,
     maximizable: false,
     minimizable: false,
     fullscreenable: false,
@@ -679,7 +817,15 @@ function createMiniWindow(): void {
     if (state.miniVisible || shotMiniPath) miniWindow?.showInactive()
   })
 
+  // 只拖位置时只有 move 会触发，只改尺寸时只有 resize 会触发，两个都要听
+  miniWindow.on('resize', scheduleMiniStateSave)
+  miniWindow.on('move', scheduleMiniStateSave)
+
   miniWindow.on('closed', () => {
+    if (miniSaveTimer) {
+      clearTimeout(miniSaveTimer)
+      miniSaveTimer = null
+    }
     miniWindow = null
     // 退出应用时窗口也会走 closed：这里若把 miniVisible 落盘成 false，
     // 用户"开着浮窗"的偏好就被自己的退出流程擦掉了，下次启动再也见不到浮窗。
@@ -750,6 +896,15 @@ function safeSend(win: BrowserWindow | null, channel: string, payload?: unknown)
   } catch (err) {
     console.error(`[caldesk] 向窗口发送 ${channel} 失败:`, (err as Error).message)
   }
+}
+
+/**
+ * 设置类真值变了：主窗口和浮窗都要重读。
+ * 浮窗靠这个广播立刻切「1天/1周/1月」，主窗口的设置面板靠它对齐开关和分段高亮。
+ */
+function broadcastSettingsChanged(): void {
+  safeSend(mainWindow, 'settings:changed')
+  safeSend(miniWindow, 'settings:changed')
 }
 
 /* --------------------------- 改动后自动推送 --------------------------- */
@@ -1111,6 +1266,10 @@ ipcMain.handle('window:is-maximized', () => mainWindow?.isMaximized() ?? false)
 ipcMain.handle('settings:get', () => ({
   miniVisible: state.miniVisible,
   miniPinned: state.miniPinned,
+  miniRange: state.miniRange,
+  miniView: state.miniView,
+  miniWidth: state.miniWidth,
+  miniHeight: state.miniHeight,
   autoStart: state.autoStart,
   closeToTray: state.closeToTray
 }))
@@ -1170,6 +1329,71 @@ ipcMain.handle('mini:pin', (_e, pinned: boolean) => {
   miniWindow?.setAlwaysOnTop(pinned, 'floating')
   persistState()
   return pinned
+})
+
+/**
+ * 切换浮窗显示范围。
+ * IPC 是跨进程边界，渲染层传什么都不奇怪：非法值原样保留旧状态，并且照样把
+ * 当前值返回去，调用方不用再查一次。
+ */
+ipcMain.handle('settings:set-mini-range', (_e, range: MiniRange) => {
+  if (isMiniRange(range)) {
+    state.miniRange = range
+    persistState()
+    broadcastSettingsChanged()
+  }
+  return state.miniRange
+})
+
+/** 切换浮窗显示样式：列表 / 月视图 */
+ipcMain.handle('settings:set-mini-view', (_e, view: MiniView) => {
+  if (isMiniView(view)) {
+    state.miniView = view
+    persistState()
+    broadcastSettingsChanged()
+  }
+  return state.miniView
+})
+
+/**
+ * 浮窗尺寸。
+ *
+ * 这是 resize grip 的高频通道（拖动时 ~60fps），所以这里只做三件事：
+ * 夹紧、setBounds、在内存里更新 state.miniWidth/Height —— **不写盘**。
+ * 落盘统一交给 createMiniWindow 里 resize/move 的 250ms 防抖，避免拖一次
+ * 窗口把 window-state.json 写几十遍。
+ */
+ipcMain.handle('mini:set-size', (_e, width: number, height: number) => {
+  // IPC 是跨进程边界：拖把手传的是屏幕坐标算出来的数，但别信它一定是有限数。
+  // 拿到 NaN 直接 setBounds 会让窗口尺寸变成 NaN，有的 Windows 版本会弹系统错误框。
+  if (!Number.isFinite(width) || !Number.isFinite(height)) {
+    return { width: state.miniWidth, height: state.miniHeight }
+  }
+  const next = miniBounds({ width, height })
+  state.miniWidth = next.width
+  state.miniHeight = next.height
+  if (miniWindow && !miniWindow.isDestroyed()) {
+    miniWindow.setBounds(next)
+    state.miniX = next.x
+    state.miniY = next.y
+  }
+  // 这里不广播、不落盘：setBounds 触发的 resize/move 会走 250ms 防抖，
+  // 由那里统一 persist + 通知主窗口刷新预设高亮，避免拖动时每帧发 IPC。
+  // 浮窗没建/隐藏时没有窗口事件，也要主动排一次落盘。
+  scheduleMiniStateSave()
+  return { width: next.width, height: next.height }
+})
+
+/** 恢复默认尺寸并重新贴右下角：低频操作，直接落盘一次 */
+ipcMain.handle('mini:reset-size', () => {
+  state.miniWidth = DEFAULT_MINI_WIDTH
+  state.miniHeight = DEFAULT_MINI_HEIGHT
+  state.miniX = undefined
+  state.miniY = undefined
+  if (miniWindow && !miniWindow.isDestroyed()) miniWindow.setBounds(miniBounds({ dock: true }))
+  persistState()
+  safeSend(mainWindow, 'settings:changed')
+  return { width: state.miniWidth, height: state.miniHeight }
 })
 
 ipcMain.handle('app:open-main', () => {

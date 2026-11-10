@@ -55,10 +55,10 @@
 
 | 平台 | 文件 | 说明 |
 | --- | --- | --- |
-| Windows 10/11 x64 | `caldesk-1.0.0-setup.exe` | 默认安装到 `C:\Program Files\caldesk` |
+| Windows 10/11 x64 | `caldesk-1.0.1-setup.exe` | 默认安装到 `C:\Program Files\caldesk` |
 | Android 8.0+ | `caldesk-1.0.0.apk` | |
 
-首次安装后在设置里填写同步服务器地址即可；纯离线使用可留空。
+首次安装后在设置里填写同步服务器地址即可；纯离线使用可留空。新安装默认浮窗为「列表 / 标准 / 1月」。
 
 ## AI 接入
 

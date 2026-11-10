@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { MiniRange, MiniView } from '@shared/mini'
 import type {
   CalendarEvent,
   CalendarMeta,
@@ -31,13 +32,21 @@ const api = {
     get: () => ipcRenderer.invoke('settings:get') as Promise<{
       miniVisible: boolean
       miniPinned: boolean
+      miniRange: MiniRange
+      miniView: MiniView
+      miniWidth: number
+      miniHeight: number
       autoStart: boolean
       closeToTray: boolean
     }>,
     setAutoStart: (on: boolean) =>
       ipcRenderer.invoke('settings:set-auto-start', on) as Promise<boolean>,
     setCloseToTray: (on: boolean) =>
-      ipcRenderer.invoke('settings:set-close-to-tray', on) as Promise<boolean>
+      ipcRenderer.invoke('settings:set-close-to-tray', on) as Promise<boolean>,
+    setMiniRange: (range: MiniRange) =>
+      ipcRenderer.invoke('settings:set-mini-range', range) as Promise<MiniRange>,
+    setMiniView: (view: MiniView) =>
+      ipcRenderer.invoke('settings:set-mini-view', view) as Promise<MiniView>
   },
   calendars: {
     list: () => ipcRenderer.invoke('calendars:list') as Promise<IpcResult<CalendarMeta[]>>,
@@ -200,12 +209,25 @@ const api = {
     ipcRenderer.on('data:changed', handler)
     return () => ipcRenderer.removeListener('data:changed', handler)
   },
+  /** 主进程广播"设置变了"：浮窗换范围、设置面板同步尺寸预设都靠它 */
+  onSettingsChanged: (cb: () => void): (() => void) => {
+    const handler = (): void => cb()
+    ipcRenderer.on('settings:changed', handler)
+    return () => ipcRenderer.removeListener('settings:changed', handler)
+  },
   mini: {
     toggle: () => ipcRenderer.invoke('mini:toggle') as Promise<boolean>,
     setVisible: (visible: boolean) =>
       ipcRenderer.invoke('mini:set-visible', visible) as Promise<boolean>,
     hide: () => ipcRenderer.invoke('mini:hide'),
-    pin: (pinned: boolean) => ipcRenderer.invoke('mini:pin', pinned) as Promise<boolean>
+    pin: (pinned: boolean) => ipcRenderer.invoke('mini:pin', pinned) as Promise<boolean>,
+    setSize: (width: number, height: number) =>
+      ipcRenderer.invoke('mini:set-size', width, height) as Promise<{
+        width: number
+        height: number
+      }>,
+    resetSize: () =>
+      ipcRenderer.invoke('mini:reset-size') as Promise<{ width: number; height: number }>
   },
   theme: {
     getMode: () => ipcRenderer.invoke('theme:get-mode') as Promise<'system' | 'light' | 'dark'>,

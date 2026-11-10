@@ -1,6 +1,6 @@
 {
   "name": "caldesk",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Windows 桌面待办与日历：内置 MCP 服务让 AI 客户端直接读写日程，配 Cloudflare Worker 可与手机同步",
   "private": true,
   "main": "./out/main/index.js",

@@ -67,7 +67,9 @@ function makeWebContents() {
     setWindowOpenHandler: noop,
     executeJavaScript: async () => null,
     debugger: { attach: noop, sendCommand: async () => null },
-    capturePage: async () => ({ toPNG: () => Buffer.alloc(0) })
+    capturePage: async () => ({ toPNG: () => Buffer.alloc(0) }),
+    // 主进程给 session 挂权限拒绝钩子（历史安全加固），测试桩也得有这一层
+    session: { setPermissionRequestHandler: noop }
   }
 }
 
@@ -264,6 +266,14 @@ try {
   eq(main.normalizeState({ x: 100, y: 200 }).x, 100, '合法坐标保留')
   eq(main.normalizeState({ maximized: 'yes', closeToTray: 0 }).maximized, false, '非布尔值回落默认')
   eq(main.normalizeState('not-an-object').miniVisible, true, '根本不是对象时整份回落默认')
+  eq(main.normalizeState({ miniRange: 'year' }).miniRange, 'month', '非法浮窗范围回落 1月')
+  eq(main.normalizeState({ miniRange: 'week' }).miniRange, 'week', '合法浮窗范围保留')
+  eq(main.normalizeState({ miniView: 'gallery' }).miniView, 'list', '非法浮窗样式回落列表')
+  eq(main.normalizeState({ miniView: 'month' }).miniView, 'month', '合法浮窗样式保留')
+  eq(main.normalizeState({ miniWidth: 380, miniHeight: 500 }).miniHeight, 460, '旧标准档 380×500 迁移到 380×460')
+  eq(main.normalizeState({ miniWidth: '400', miniHeight: 200 }).miniWidth, 380, '字符串浮窗宽度回落默认')
+  eq(main.normalizeState({ miniWidth: 100, miniHeight: 5000 }).miniWidth, 280, '浮窗宽度低于下限被夹紧')
+  eq(main.normalizeState({ miniWidth: 100, miniHeight: 5000 }).miniHeight, 1000, '浮窗高度高于上限被夹紧')
 
   const statePath = join(userData, 'window-state.json')
   writeFileSync(statePath, JSON.stringify({ themeMode: 'neon', width: 'x', miniVisible: 'yes' }))
